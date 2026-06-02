@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Terminal, Cpu, Database as DbIcon, 
-  Settings, AlertCircle, RefreshCw, Send, CheckCircle2, 
+import {
+  Terminal, Cpu, Database as DbIcon,
+  Settings, AlertCircle, RefreshCw, Send, CheckCircle2,
   Layers, Zap, Clock, Code, Activity, Globe, Server, Download, Upload, Shield, Save,
   Trash2, Plus, Users, CreditCard, Check, X, Eye, ShieldAlert, Lock, LogOut
 } from 'lucide-react';
@@ -20,7 +20,7 @@ const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Resp
   const token = localStorage.getItem('admin_session_token');
   const urlStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : (input && 'url' in (input as any) ? (input as any).url : ''));
   const isApi = urlStr.startsWith('/') || urlStr.startsWith(window.location.origin) || urlStr.includes('/api/');
-  
+
   if (token && isApi) {
     init = init || {};
     let headers: Record<string, string> = {};
@@ -41,11 +41,11 @@ const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Resp
     headers['Authorization'] = `Bearer ${token}`;
     init.headers = headers;
   }
-  
+
   const res = await window.fetch(input, init);
-  
+
   // Safe JSON interceptor to avoid "Unexpected end of JSON" or "Unexpected token < animate" crashes
-  res.json = async function() {
+  res.json = async function () {
     try {
       const text = await res.text();
       if (!text || !text.trim()) {
@@ -63,7 +63,7 @@ const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Resp
       return { error: err.message || 'Javobni o\'qishda xatolik yuz berdi' };
     }
   };
-  
+
   return res;
 };
 
@@ -93,7 +93,7 @@ export default function App() {
 
   const [users, setUsers] = useState<any[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
-  const [projectsData, setProjectsData] = useState<{projects: any[], episodes: any[]}>({projects: [], episodes: []});
+  const [projectsData, setProjectsData] = useState<{ projects: any[], episodes: any[] }>({ projects: [], episodes: [] });
   const [projectsLoading, setProjectsLoading] = useState(false);
 
   // Backup States
@@ -110,12 +110,12 @@ export default function App() {
   const initAppCore = async () => {
     setLoading(true);
     await Promise.all([
-      fetchStats(), 
-      fetchLogs(), 
-      fetchConfig(), 
+      fetchStats(),
+      fetchLogs(),
+      fetchConfig(),
       fetchLocales(),
       fetchTeams(),
-      
+
       fetchPromocodes(),
       fetchApiHealth(),
       fetchSessionsList()
@@ -206,9 +206,9 @@ export default function App() {
   };
 
   // States to locally adjust and modify balance & limits
-  const [tokenAdjustment, setTokenAdjustment] = useState<{[teamId: string]: string}>({});
-  const [directUserMessage, setDirectUserMessage] = useState<{[userId: string]: string}>({});
-  const [sendingMessageStatus, setSendingMessageStatus] = useState<{[userId: string]: string}>({});
+  const [tokenAdjustment, setTokenAdjustment] = useState<{ [teamId: string]: string }>({});
+  const [directUserMessage, setDirectUserMessage] = useState<{ [userId: string]: string }>({});
+  const [sendingMessageStatus, setSendingMessageStatus] = useState<{ [userId: string]: string }>({});
 
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [broadcastTargetTeam, setBroadcastTargetTeam] = useState('');
@@ -222,7 +222,7 @@ export default function App() {
         const data = await res.json();
         setUsers(data);
       }
-    } catch (e) {}
+    } catch (e) { }
     setUsersLoading(false);
   };
 
@@ -234,7 +234,7 @@ export default function App() {
         const data = await res.json();
         setProjectsData(data);
       }
-    } catch (e) {}
+    } catch (e) { }
     setProjectsLoading(false);
   };
 
@@ -325,7 +325,7 @@ export default function App() {
         await fetchUsers();
         await fetchStats();
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const handleKickUser = async (userId: number) => {
@@ -337,7 +337,7 @@ export default function App() {
         await fetchTeams();
         await fetchStats();
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const handleSendDirectMessage = async (userId: number) => {
@@ -385,7 +385,7 @@ export default function App() {
       } else {
         alert("Xato yuz berdi");
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const handleSendBroadcast = async () => {
@@ -441,7 +441,7 @@ export default function App() {
         const data = await res.json();
         setTelegramStatus(data);
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const fetchAutomatedAnimes = async () => {
@@ -557,7 +557,41 @@ export default function App() {
     setApiKeys(updated);
   };
 
-  const [locales, setLocales] = useState<{name: string, lang: string, size: number, mtime: string}[]>([]);
+  const handleDownloadGeminiKeys = () => {
+    const validKeys = apiKeys.map(k => k.trim()).filter(Boolean);
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ keys: validKeys }, null, 2));
+    const dlAnchorElem = document.createElement('a');
+    dlAnchorElem.setAttribute("href", dataStr);
+    dlAnchorElem.setAttribute("download", "gemini_keys.json");
+    document.body.appendChild(dlAnchorElem);
+    dlAnchorElem.click();
+    document.body.removeChild(dlAnchorElem);
+  };
+
+  const handleUploadGeminiKeys = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setApiKeys(parsed);
+        } else if (parsed.keys && Array.isArray(parsed.keys) && parsed.keys.length > 0) {
+          setApiKeys(parsed.keys);
+        } else {
+          alert("Noto'g'ri JSON formati!");
+        }
+      } catch (err) {
+        alert("JSON o'qishda xatolik yuz berdi!");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const [locales, setLocales] = useState<{ name: string, lang: string, size: number, mtime: string }[]>([]);
   const [selectedLang, setSelectedLang] = useState('uz');
   const [newLangCode, setNewLangCode] = useState('');
   const [isAddingLang, setIsAddingLang] = useState(false);
@@ -588,7 +622,7 @@ export default function App() {
         const data = await res.json();
         setStats(prev => ({ ...prev, ...data }));
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const fetchLogs = async () => {
@@ -598,7 +632,7 @@ export default function App() {
         const data = await res.json();
         setLogs(data);
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const fetchLocales = async () => {
@@ -608,7 +642,7 @@ export default function App() {
         const data = await res.json();
         setLocales(data);
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const fetchTeams = async () => {
@@ -619,7 +653,7 @@ export default function App() {
         const data = await res.json();
         setTeams(data);
       }
-    } catch (e) {}
+    } catch (e) { }
     setTeamsLoading(false);
   };
 
@@ -631,7 +665,7 @@ export default function App() {
         const data = await res.json();
         setPayments(data);
       }
-    } catch (e) {}
+    } catch (e) { }
     setPaymentsLoading(false);
   };
 
@@ -682,7 +716,7 @@ export default function App() {
     setPackages(packages.filter(p => p.id !== idToRemove));
   };
 
-  
+
   const [promocodes, setPromocodes] = useState<any[]>([]);
   const [newPromoCode, setNewPromoCode] = useState('');
   const [newPromoType, setNewPromoType] = useState('tokens');
@@ -697,7 +731,7 @@ export default function App() {
       if (res.ok) {
         setPromocodes(await res.json());
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const handleAddPromocode = async () => {
@@ -734,7 +768,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/admin/promocodes/${id}`, { method: 'DELETE' });
       if (res.ok) await fetchPromocodes();
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const fetchConfig = async () => {
@@ -752,8 +786,10 @@ export default function App() {
         setCardNumber(data.cardNumber || '');
         setCardOwner(data.cardOwner || '');
         setPackages(data.packages || []);
+        setTelegramApiId(data.telegramApiId || '');
+        setTelegramApiHash(data.telegramApiHash || '');
       }
-    } catch (e) {}
+    } catch (e) { }
   };
 
   useEffect(() => {
@@ -827,16 +863,18 @@ export default function App() {
       const res = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          botToken, 
-          geminiApiKey, 
+        body: JSON.stringify({
+          botToken,
+          geminiApiKey,
           defaultBatchSize: parseInt(defaultBatchSize) || 45,
           systemPrompt,
           auto_download_enabled: autoDownloadEnabled,
           storage_channel_id: storageChannelId,
           cardNumber,
           cardOwner,
-          packages
+          packages,
+          telegramApiId,
+          telegramApiHash
         })
       });
       if (res.ok) {
@@ -932,10 +970,10 @@ export default function App() {
       const res = await fetch(`/api/teams/${id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          status, 
-          tokens: tk !== undefined ? tk : 1000, 
-          maxConcurrentJobs: maxC !== undefined ? maxC : 2 
+        body: JSON.stringify({
+          status,
+          tokens: tk !== undefined ? tk : 1000,
+          maxConcurrentJobs: maxC !== undefined ? maxC : 2
         })
       });
       if (res.ok) {
@@ -976,7 +1014,7 @@ export default function App() {
 
   const handleDownloadYaml = () => {
     const element = document.createElement("a");
-    const file = new Blob([yamlContent], {type: 'text/plain'});
+    const file = new Blob([yamlContent], { type: 'text/plain' });
     element.href = URL.createObjectURL(file);
     element.download = `${selectedLang}.yaml`;
     document.body.appendChild(element);
@@ -1010,7 +1048,7 @@ export default function App() {
     ]);
 
     // Build Teams CSV content safely handling quotes & commas
-    const csvTeamsContent = "data:text/csv;charset=utf-8,\uFEFF" 
+    const csvTeamsContent = "data:text/csv;charset=utf-8,\uFEFF"
       + [teamsHeaders.join(","), ...teamsRows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(","))].join("\n");
     const encodedTeamsUri = encodeURI(csvTeamsContent);
     const linkTeams = document.createElement("a");
@@ -1022,7 +1060,7 @@ export default function App() {
 
     // Build Projects CSV content with slight delay to prevent popup-blockers
     setTimeout(() => {
-      const csvProjContent = "data:text/csv;charset=utf-8,\uFEFF" 
+      const csvProjContent = "data:text/csv;charset=utf-8,\uFEFF"
         + [projectsHeaders.join(","), ...projectsRows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(","))].join("\n");
       const encodedProjUri = encodeURI(csvProjContent);
       const linkProj = document.createElement("a");
@@ -1062,7 +1100,7 @@ export default function App() {
         {/* Left Side: Modern Interactive Login form */}
         <div className="flex-1 flex flex-col items-center justify-center p-6 md:p-12 border-b lg:border-b-0 lg:border-r border-slate-900 bg-slate-950/60 relative min-h-[450px]">
           <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-sky-500 via-indigo-500 to-emerald-500"></div>
-          
+
           <div className="max-w-md w-full space-y-6">
             <div className="text-center lg:text-left space-y-2">
               <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-sky-500/10 border border-sky-500/20 text-sky-400 text-xs font-mono uppercase mb-2">
@@ -1162,7 +1200,7 @@ export default function App() {
                       <span className={`w-1.5 h-1.5 rounded-full ${sess.status === 'Faol' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`}></span>
                     </div>
                     <p className="text-[10px] text-slate-400 font-mono truncate">
-                      IP: <span className="font-sans font-semibold text-slate-300 select-all">{sess.ip}</span> • 
+                      IP: <span className="font-sans font-semibold text-slate-300 select-all">{sess.ip}</span> •
                       Qurilma: <span className="font-sans text-slate-500" title={sess.userAgent}>{sess.userAgent}</span>
                     </p>
                   </div>
@@ -1170,13 +1208,12 @@ export default function App() {
                     <p className="text-[10px] font-mono text-slate-400">Kirish: {sess.loginTime}</p>
                     <p className="text-[10px] font-mono text-emerald-400 mt-0.5">Faollik: {sess.lastActive}</p>
                     <p className="mt-1">
-                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${
-                        sess.status === 'Faol' 
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${sess.status === 'Faol'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                           : sess.status === 'Chiqilgan'
-                          ? 'bg-slate-500/10 text-slate-500 border border-slate-500/20'
-                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                      }`}>
+                            ? 'bg-slate-500/10 text-slate-500 border border-slate-500/20'
+                            : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                        }`}>
                         {sess.status}
                       </span>
                     </p>
@@ -1286,7 +1323,7 @@ export default function App() {
                         </div>
                       </div>
                       <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
-                        <div 
+                        <div
                           className="h-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.5)] transition-all duration-500"
                           style={{ width: `${job.progress}%` }}
                         ></div>
@@ -1305,73 +1342,66 @@ export default function App() {
             <div className="w-full md:w-1/2 bg-slate-900/30 flex flex-col max-h-full">
               <div className="min-h-[48px] py-1.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-3 shrink-0">
                 <div className="flex flex-wrap gap-1.5 w-full">
-                  <button 
+                  <button
                     onClick={() => setActiveTab('config')}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${
-                      activeTab === 'config' 
-                        ? 'bg-sky-500 text-slate-950 font-bold' 
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'config'
+                        ? 'bg-sky-500 text-slate-950 font-bold'
                         : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
-                    }`}
+                      }`}
                   >
                     <Server className="w-3 h-3" /> Settings
                   </button>
-                  <button 
+                  <button
                     onClick={() => setActiveTab('teams')}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${
-                      activeTab === 'teams' 
-                        ? 'bg-sky-500 text-slate-950 font-bold' 
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'teams'
+                        ? 'bg-sky-500 text-slate-950 font-bold'
                         : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
-                    }`}
+                      }`}
                   >
                     <Users className="w-3 h-3" /> Teams ({teams.length})
                   </button>
-                  <button 
+                  <button
                     onClick={() => setActiveTab('payments')}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${
-                      activeTab === 'payments' 
-                        ? 'bg-sky-500 text-slate-950 font-bold' 
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'payments'
+                        ? 'bg-sky-500 text-slate-950 font-bold'
                         : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
-                    }`}
+                      }`}
                   >
                     <CreditCard className="w-3 h-3" /> Receipts ({payments.length})
                   </button>
-                  <button 
+                  <button
                     onClick={() => setActiveTab('yaml')}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${
-                      activeTab === 'yaml' 
-                        ? 'bg-sky-500 text-slate-950 font-bold' 
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'yaml'
+                        ? 'bg-sky-500 text-slate-950 font-bold'
                         : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
-                    }`}
+                      }`}
                   >
                     <Globe className="w-3 h-3" /> Localization
                   </button>
-                  <button 
+                  <button
                     onClick={() => setActiveTab('stats')}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${
-                      activeTab === 'stats' 
-                        ? 'bg-sky-500 text-slate-950 font-bold' 
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'stats'
+                        ? 'bg-sky-500 text-slate-950 font-bold'
                         : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
-                    }`}
+                      }`}
                   >
                     <Activity className="w-3 h-3" /> Stats & Ratings
                   </button>
-                   <button 
+                  <button
                     onClick={() => setActiveTab('admin_users')}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${
-                      activeTab === 'admin_users' 
-                        ? 'bg-rose-500 text-slate-950 font-bold' 
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'admin_users'
+                        ? 'bg-rose-500 text-slate-950 font-bold'
                         : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
-                    }`}
+                      }`}
                   >
                     <ShieldAlert className="w-3 h-3" /> Admin Users
                   </button>
-                  <button 
+                  <button
                     onClick={() => setActiveTab('backups')}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${
-                      activeTab === 'backups' 
-                        ? 'bg-sky-500 text-slate-950 font-bold' 
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'backups'
+                        ? 'bg-sky-500 text-slate-950 font-bold'
                         : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
-                    }`}
+                      }`}
                   >
                     <DbIcon className="w-3 h-3" /> Backups
                   </button>
@@ -1397,7 +1427,7 @@ export default function App() {
                           Tekshirish
                         </button>
                       </h3>
-                      
+
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex flex-col justify-between">
                           <span className="text-[9px] uppercase font-bold text-slate-500 font-mono">Ulanish Holati</span>
@@ -1418,7 +1448,7 @@ export default function App() {
 
                         <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex flex-col justify-between">
                           <span className="text-[9px] uppercase font-bold text-slate-500 font-mono">Tizim holati (HTTP)</span>
-                          <span className={`text-[11px] font-mono font-bold mt-1 uppercase ${apiHealth?.status === 'ok' || apiHealth?.gemini?.status === 'connected' ? 'text-emerald-400': 'text-rose-400'}`}>
+                          <span className={`text-[11px] font-mono font-bold mt-1 uppercase ${apiHealth?.status === 'ok' || apiHealth?.gemini?.status === 'connected' ? 'text-emerald-400' : 'text-rose-400'}`}>
                             {apiHealth?.status === 'ok' || apiHealth?.gemini?.status === 'connected' ? 'ONLINE (200)' : 'OFFLINE/ERROR'}
                           </span>
                         </div>
@@ -1436,104 +1466,137 @@ export default function App() {
                     </div>
 
                     <form onSubmit={handleSaveConfig} className="space-y-4">
-                    <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-3">
-                      <h3 className="text-xs font-bold uppercase text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
-                        <Shield className="w-3.5 h-3.5 text-sky-400" /> SubTrans Engine Keys & Limits Config
-                      </h3>
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="block text-[10px] uppercase font-bold text-slate-400 font-mono">Telegram Bot Token</label>
-                          <span className="text-[9px] text-slate-600 font-mono">Auto-restarts connection</span>
+                      <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-3">
+                        <h3 className="text-xs font-bold uppercase text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+                          <Shield className="w-3.5 h-3.5 text-sky-400" /> SubTrans Engine Keys & Limits Config
+                        </h3>
+                        <div>
+                          <div className="flex justify-between items-center mb-1">
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 font-mono">Telegram Bot Token</label>
+                            <span className="text-[9px] text-slate-600 font-mono">Auto-restarts connection</span>
+                          </div>
+                          <input
+                            type="password"
+                            className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                            placeholder="Telegram Bot Token"
+                            value={botToken}
+                            onChange={(e) => setBotToken(e.target.value)}
+                            required
+                          />
                         </div>
-                        <input 
-                          type="password"
-                          className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                          placeholder="Telegram Bot Token"
-                          value={botToken}
-                          onChange={(e) => setBotToken(e.target.value)}
-                          required
-                        />
-                      </div>
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="block text-[10px] uppercase font-bold text-slate-400 font-mono">Gemini API Keys List</label>
-                          <button 
-                            type="button"
-                            onClick={handleAddApiKey}
-                            className="bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 text-[10px] font-bold px-2.5 py-1 rounded border border-sky-500/20 flex items-center gap-1 cursor-pointer transition-colors"
-                          >
-                            <Plus className="w-3 h-3 text-sky-400" /> Kalit qoʻshish (Key Rotation)
-                          </button>
-                        </div>
-                        <div className="space-y-2 max-h-40 overflow-y-auto mb-1.5 p-1.5 bg-slate-950/40 rounded border border-slate-800/60">
-                          {apiKeys.map((key, index) => (
-                            <div key={index} className="flex gap-2">
-                              <input 
-                                type="password"
-                                className="flex-1 bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                                placeholder={`API Key #${index + 1}`}
-                                value={key}
-                                onChange={(e) => handleApiKeyChange(index, e.target.value)}
-                                required={index === 0}
-                              />
-                              {apiKeys.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemoveApiKey(index)}
-                                  className="text-slate-500 hover:text-rose-400 px-2.5 py-1 border border-slate-800 rounded bg-slate-900/40 hover:bg-slate-900 transition-colors shrink-0 flex items-center justify-center cursor-pointer"
-                                  title="Oʻchirish / Delete"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              )}
+                        <div>
+                          <div className="flex justify-between items-center mb-1.5">
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 font-mono">Gemini API Keys List</label>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={handleAddApiKey}
+                                className="bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 text-[10px] font-bold px-2.5 py-1 rounded border border-sky-500/20 flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <Plus className="w-3 h-3 text-sky-400" /> Kalit qoʻshish
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleDownloadGeminiKeys}
+                                className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <Download className="w-3 h-3 text-slate-300" /> JSON
+                              </button>
+                              <label className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1 cursor-pointer transition-colors">
+                                <Upload className="w-3 h-3 text-slate-300" /> JSON
+                                <input type="file" accept=".json" onChange={handleUploadGeminiKeys} className="hidden" />
+                              </label>
                             </div>
-                          ))}
+                          </div>
+                          <div className="space-y-2 max-h-40 overflow-y-auto mb-1.5 p-1.5 bg-slate-950/40 rounded border border-slate-800/60">
+                            {apiKeys.map((key, index) => (
+                              <div key={index} className="flex gap-2">
+                                <input
+                                  type="password"
+                                  className="flex-1 bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                                  placeholder={`API Key #${index + 1}`}
+                                  value={key}
+                                  onChange={(e) => handleApiKeyChange(index, e.target.value)}
+                                  required={index === 0}
+                                />
+                                {apiKeys.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveApiKey(index)}
+                                    className="text-slate-500 hover:text-rose-400 px-2.5 py-1 border border-slate-800 rounded bg-slate-900/40 hover:bg-slate-900 transition-colors shrink-0 flex items-center justify-center cursor-pointer"
+                                    title="Oʻchirish / Delete"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          <p className="text-[9px] text-slate-500 font-mono leading-relaxed">
+                            Tizim kiritilgan barcha kalitlarni aylanma tartibda (Key Rotation) ishlashini ta'minlaydi. Har bir kalit alohida inputga yozilishi lozim.
+                          </p>
                         </div>
-                        <p className="text-[9px] text-slate-500 font-mono leading-relaxed">
-                          Tizim kiritilgan barcha kalitlarni aylanma tartibda (Key Rotation) ishlashini ta'minlaydi. Har bir kalit alohida inputga yozilishi lozim.
-                        </p>
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Default Batch Size (Lines per Request)</label>
+                          <input
+                            type="number"
+                            className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                            value={defaultBatchSize}
+                            onChange={(e) => setDefaultBatchSize(e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-800">
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Telegram API ID (.env)</label>
+                            <input
+                              type="text"
+                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={telegramApiId}
+                              onChange={(e) => setTelegramApiId(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Telegram API Hash (.env)</label>
+                            <input
+                              type="text"
+                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={telegramApiHash}
+                              onChange={(e) => setTelegramApiHash(e.target.value)}
+                            />
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Default Batch Size (Lines per Request)</label>
-                        <input 
-                          type="number"
-                          className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                          value={defaultBatchSize}
-                          onChange={(e) => setDefaultBatchSize(e.target.value)}
-                          required
-                        />
-                      </div>
-                    </div>
 
-                    <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-2">
-                      <h3 className="text-xs font-bold uppercase text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
-                        <Code className="w-3.5 h-3.5 text-sky-400" /> Active System Prompt Guidelines
-                      </h3>
-                      <div>
-                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Global Translation System Instruction</label>
-                        <textarea
-                          className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-sans h-24 resize-none leading-relaxed"
-                          placeholder="Uslublarni saqlagan holda o'zbek tiliga tarjima qiling..."
-                          value={systemPrompt}
-                          onChange={(e) => setSystemPrompt(e.target.value)}
-                        />
+                      <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-2">
+                        <h3 className="text-xs font-bold uppercase text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+                          <Code className="w-3.5 h-3.5 text-sky-400" /> Active System Prompt Guidelines
+                        </h3>
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Global Translation System Instruction</label>
+                          <textarea
+                            className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-sans h-24 resize-none leading-relaxed"
+                            placeholder="Uslublarni saqlagan holda o'zbek tiliga tarjima qiling..."
+                            value={systemPrompt}
+                            onChange={(e) => setSystemPrompt(e.target.value)}
+                          />
+                        </div>
                       </div>
-                    </div>
 
-                    <button 
-                      type="submit"
-                      className="w-full bg-sky-500 hover:bg-sky-600 text-slate-950 font-extrabold text-xs h-9 rounded flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider transition-colors"
-                    >
-                      <Save className="w-3.5 h-3.5 text-slate-950" />
-                      Save Settings & Restart Bot
-                    </button>
+                      <button
+                        type="submit"
+                        className="w-full bg-sky-500 hover:bg-sky-600 text-slate-950 font-extrabold text-xs h-9 rounded flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider transition-colors"
+                      >
+                        <Save className="w-3.5 h-3.5 text-slate-950" />
+                        Save Settings & Restart Bot
+                      </button>
 
-                    {configSaveSuccess && (
-                      <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400 text-xs flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        <span>Configuration and System Prompt saved! Active Telegram Bot restarted!</span>
-                      </div>
-                    )}
+                      {configSaveSuccess && (
+                        <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400 text-xs flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>Configuration and System Prompt saved! Active Telegram Bot restarted!</span>
+                        </div>
+                      )}
                     </form>
 
                     {/* Telegram User Account Client Pairing Wizard */}
@@ -1557,7 +1620,7 @@ export default function App() {
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">API ID</label>
-                              <input 
+                              <input
                                 type="text"
                                 className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                                 placeholder="2040..."
@@ -1567,7 +1630,7 @@ export default function App() {
                             </div>
                             <div>
                               <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">API Hash</label>
-                              <input 
+                              <input
                                 type="text"
                                 className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                                 placeholder="b184c..."
@@ -1578,7 +1641,7 @@ export default function App() {
                           </div>
                           <div>
                             <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Telefon raqami (xalqaro formatda)</label>
-                            <input 
+                            <input
                               type="text"
                               className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               placeholder="+998901234567"
@@ -1604,7 +1667,7 @@ export default function App() {
                           </div>
                           <div>
                             <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">SMS/Telegram kod</label>
-                            <input 
+                            <input
                               type="text"
                               className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               placeholder="Kodni kiriting"
@@ -1639,7 +1702,7 @@ export default function App() {
                           </div>
                           <div>
                             <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">2FA Paroli</label>
-                            <input 
+                            <input
                               type="password"
                               className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               placeholder="2FA parolini kiriting"
@@ -1709,7 +1772,7 @@ export default function App() {
 
                         <div>
                           <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Storage Channel (Kanal ID)</label>
-                          <input 
+                          <input
                             type="text"
                             className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                             placeholder="Masalan: @my_anim_storage yoki -1002345678"
@@ -1721,7 +1784,7 @@ export default function App() {
                           </p>
                         </div>
 
-                        <button 
+                        <button
                           onClick={handleSaveConfig}
                           className="bg-sky-500 hover:bg-sky-600 text-slate-950 text-xs font-extrabold px-4 py-2 rounded uppercase tracking-wider transition-colors cursor-pointer"
                         >
@@ -1739,7 +1802,7 @@ export default function App() {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                         <div>
                           <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Karta Raqami (Chek yuborish uchun)</label>
-                          <input 
+                          <input
                             type="text"
                             className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
                             placeholder="Masalan: 8600 0000 0000 0000"
@@ -1750,7 +1813,7 @@ export default function App() {
 
                         <div>
                           <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Karta Egasi</label>
-                          <input 
+                          <input
                             type="text"
                             className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
                             placeholder="Masalan: Sherzodbek To'xtasinov"
@@ -1762,7 +1825,7 @@ export default function App() {
 
                       <div className="space-y-2 mt-2">
                         <span className="block text-[10px] uppercase font-bold text-slate-400 font-mono mb-2">Mavjud Tarif va Paketlar Ro'yxati ({packages.length})</span>
-                        
+
                         {packages.length === 0 ? (
                           <div className="p-3 text-center text-xs text-slate-500 bg-slate-950 border border-slate-800 rounded font-mono">
                             Hozircha hech qanday paket yaratilmagan. Iltimos, pastdan yangisini qo'shing.
@@ -1774,7 +1837,7 @@ export default function App() {
                                 <div>
                                   <div className="text-xs font-bold text-white flex justify-between items-center">
                                     <span>{pack.name}</span>
-                                    <button 
+                                    <button
                                       type="button"
                                       onClick={() => handleRemovePackage(pack.id)}
                                       className="text-rose-400 hover:text-rose-500 text-[10px] font-bold p-1 hover:bg-rose-500/10 rounded cursor-pointer transition-colors"
@@ -1784,10 +1847,10 @@ export default function App() {
                                   </div>
                                   <div className="text-[10px] text-slate-400 font-mono mt-1 space-y-1">
                                     <div>Turi: <span className="text-emerald-400 font-bold">{
-                                      pack.type === 'tokens' ? 'Token (Qo\'lda tarjima)' : 
-                                      pack.type === 'monthly_starter' ? 'Starter (So\'nggi 10)' :
-                                      pack.type === 'monthly_fandub' ? 'FanDub (So\'nggi 25)' :
-                                      pack.type === 'monthly_studio' ? 'Studio (So\'nggi 50)' : pack.type
+                                      pack.type === 'tokens' ? 'Token (Qo\'lda tarjima)' :
+                                        pack.type === 'monthly_starter' ? 'Starter (So\'nggi 10)' :
+                                          pack.type === 'monthly_fandub' ? 'FanDub (So\'nggi 25)' :
+                                            pack.type === 'monthly_studio' ? 'Studio (So\'nggi 50)' : pack.type
                                     }</span></div>
                                     <div>Qiymati: <span className="text-sky-400">{pack.value?.toLocaleString()} {pack.type === 'tokens' ? 'token' : 'subtitle'}</span></div>
                                     <div className="text-xs text-white font-bold mt-1.5 pt-1.5 border-t border-slate-900">Narxi: <span className="text-amber-400">{pack.price}</span></div>
@@ -1802,11 +1865,11 @@ export default function App() {
                       {/* Add new package form inline */}
                       <div className="bg-slate-950 border border-slate-800 rounded-lg p-3.5 space-y-3">
                         <span className="block text-[10px] uppercase font-bold text-slate-300 font-mono">➕ Yangi Tarif/Paket Qo'shish</span>
-                        
+
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
                           <div>
                             <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Paket Nomi</label>
-                            <input 
+                            <input
                               type="text"
                               className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               placeholder="Masalan: Boshlang'ich"
@@ -1817,7 +1880,7 @@ export default function App() {
 
                           <div>
                             <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Paket Turi</label>
-                            <select 
+                            <select
                               className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               value={newPackType}
                               onChange={(e) => {
@@ -1836,7 +1899,7 @@ export default function App() {
 
                           <div>
                             <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Maksimal limit/qiymat</label>
-                            <input 
+                            <input
                               type="number"
                               className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               placeholder="Masalan: 10"
@@ -1847,7 +1910,7 @@ export default function App() {
 
                           <div>
                             <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Narxi (Tekst shaklda)</label>
-                            <input 
+                            <input
                               type="text"
                               className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               placeholder="Masalan: 50,000 O'zS"
@@ -1857,7 +1920,7 @@ export default function App() {
                           </div>
                           <div>
                             <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Amal qilish muddati (kun)</label>
-                            <input 
+                            <input
                               type="number"
                               className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               placeholder="Bo'sh=cheksiz"
@@ -1867,7 +1930,7 @@ export default function App() {
                           </div>
                         </div>
 
-                        <button 
+                        <button
                           type="button"
                           onClick={handleAddPackage}
                           className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-xs px-3.5 py-1.5 rounded uppercase tracking-wider transition-colors cursor-pointer"
@@ -1878,7 +1941,7 @@ export default function App() {
 
                       <div className="pt-2 border-t border-slate-800 flex justify-between items-center bg-slate-950/20 p-2 rounded">
                         <p className="text-[9px] text-slate-500 font-mono leading-relaxed">Billing va kartaga oid o'zgarishlarni bevosita saqlash uchun o'ngdagi tugmani bosing:</p>
-                        <button 
+                        <button
                           onClick={handleSaveConfig}
                           className="bg-sky-500 hover:bg-sky-600 text-slate-950 text-xs font-bold px-4 py-2 rounded uppercase tracking-wider transition-colors cursor-pointer"
                         >
@@ -1887,117 +1950,117 @@ export default function App() {
                       </div>
                     </div>
 
-                    
-                      {/* PROMOCODES SECTION */}
-                      <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-4 text-left mt-4">
-                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
-                          🎁 Promokodlar Tizimi
-                        </h3>
-                        
-                        {promoError && (
-                          <div className="text-[10px] text-rose-400 bg-rose-950/20 border border-rose-800 p-2 rounded">
-                            {promoError}
-                          </div>
-                        )}
 
-                        <div className="space-y-2 mt-2">
-                          <span className="block text-[10px] uppercase font-bold text-slate-400 font-mono mb-2">Mavjud Promokodlar ({promocodes.length})</span>
-                          {promocodes.length === 0 ? (
-                            <div className="p-3 text-center text-xs text-slate-500 bg-slate-950 border border-slate-800 rounded font-mono">
-                              Hozircha hech qanday promokod yaratilmagan.
-                            </div>
-                          ) : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                              {promocodes.map((promo) => (
-                                <div key={promo.id} className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex flex-col justify-between relative space-y-2 font-mono">
-                                  <div>
-                                    <div className="text-xs font-bold text-white flex justify-between items-center">
-                                      <span className="text-emerald-400">{promo.code}</span>
-                                      <button 
-                                        type="button"
-                                        onClick={() => handleDeletePromocode(promo.id)}
-                                        className="text-rose-400 hover:text-rose-500 text-[10px] font-bold p-1 hover:bg-rose-500/10 rounded cursor-pointer transition-colors"
-                                      >
-                                        O'chirish
-                                      </button>
-                                    </div>
-                                    <div className="text-[10px] text-slate-400 font-mono mt-1 space-y-1">
-                                      <div>Turi: <span className="text-sky-400 font-bold">{promo.type}</span></div>
-                                      <div>Qiymati: <span className="text-sky-400">{promo.value}</span></div>
-                                      <div>Muddat (kun): <span className="text-amber-400">{promo.days ? promo.days : 'Cheksiz'}</span></div>
-                                      <div>Ishlatilgan: <span className="text-slate-300">{promo.usedBy.length} / {promo.maxUses === 0 ? 'Cheksiz' : promo.maxUses} marta</span></div>
-                                    </div>
+                    {/* PROMOCODES SECTION */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-4 text-left mt-4">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+                        🎁 Promokodlar Tizimi
+                      </h3>
+
+                      {promoError && (
+                        <div className="text-[10px] text-rose-400 bg-rose-950/20 border border-rose-800 p-2 rounded">
+                          {promoError}
+                        </div>
+                      )}
+
+                      <div className="space-y-2 mt-2">
+                        <span className="block text-[10px] uppercase font-bold text-slate-400 font-mono mb-2">Mavjud Promokodlar ({promocodes.length})</span>
+                        {promocodes.length === 0 ? (
+                          <div className="p-3 text-center text-xs text-slate-500 bg-slate-950 border border-slate-800 rounded font-mono">
+                            Hozircha hech qanday promokod yaratilmagan.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                            {promocodes.map((promo) => (
+                              <div key={promo.id} className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex flex-col justify-between relative space-y-2 font-mono">
+                                <div>
+                                  <div className="text-xs font-bold text-white flex justify-between items-center">
+                                    <span className="text-emerald-400">{promo.code}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeletePromocode(promo.id)}
+                                      className="text-rose-400 hover:text-rose-500 text-[10px] font-bold p-1 hover:bg-rose-500/10 rounded cursor-pointer transition-colors"
+                                    >
+                                      O'chirish
+                                    </button>
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 font-mono mt-1 space-y-1">
+                                    <div>Turi: <span className="text-sky-400 font-bold">{promo.type}</span></div>
+                                    <div>Qiymati: <span className="text-sky-400">{promo.value}</span></div>
+                                    <div>Muddat (kun): <span className="text-amber-400">{promo.days ? promo.days : 'Cheksiz'}</span></div>
+                                    <div>Ishlatilgan: <span className="text-slate-300">{promo.usedBy.length} / {promo.maxUses === 0 ? 'Cheksiz' : promo.maxUses} marta</span></div>
                                   </div>
                                 </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="bg-slate-950 border border-slate-800 rounded-lg p-3.5 space-y-3">
-                          <span className="block text-[10px] uppercase font-bold text-slate-300 font-mono">➕ Yangi Promokod Qo'shish</span>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
-                            <div>
-                              <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Kod Nomi</label>
-                              <input 
-                                type="text"
-                                className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono uppercase"
-                                placeholder="Masalan: NEWYEAR2026"
-                                value={newPromoCode}
-                                onChange={(e) => setNewPromoCode(e.target.value.toUpperCase())}
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Turi</label>
-                              <select 
-                                className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                                value={newPromoType}
-                                onChange={(e) => setNewPromoType(e.target.value)}
-                              >
-                                <option value="tokens">Tokenlar</option>
-                                <option value="monthly_starter">Starter (Obuna)</option>
-                                <option value="monthly_fandub">FanDub (Obuna)</option>
-                                <option value="monthly_studio">Studio (Obuna)</option>
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Qiymati / Limiti</label>
-                              <input 
-                                type="number"
-                                className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                                value={newPromoValue}
-                                onChange={(e) => setNewPromoValue(e.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Kun (Bo'sh=Cheksiz)</label>
-                              <input 
-                                type="number"
-                                className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                                value={newPromoDays}
-                                onChange={(e) => setNewPromoDays(e.target.value)}
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Ishlatish Limiti (0=cheksiz)</label>
-                              <input 
-                                type="number"
-                                className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                                placeholder="1"
-                                value={newPromoMaxUses}
-                                onChange={(e) => setNewPromoMaxUses(e.target.value)}
-                              />
-                            </div>
+                              </div>
+                            ))}
                           </div>
-                          <button 
-                            type="button"
-                            onClick={handleAddPromocode}
-                            className="bg-sky-500 hover:bg-sky-600 text-slate-950 font-extrabold text-xs px-3.5 py-1.5 rounded uppercase tracking-wider transition-colors cursor-pointer"
-                          >
-                            Promokod Yaratish
-                          </button>
-                        </div>
+                        )}
                       </div>
+
+                      <div className="bg-slate-950 border border-slate-800 rounded-lg p-3.5 space-y-3">
+                        <span className="block text-[10px] uppercase font-bold text-slate-300 font-mono">➕ Yangi Promokod Qo'shish</span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
+                          <div>
+                            <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Kod Nomi</label>
+                            <input
+                              type="text"
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono uppercase"
+                              placeholder="Masalan: NEWYEAR2026"
+                              value={newPromoCode}
+                              onChange={(e) => setNewPromoCode(e.target.value.toUpperCase())}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Turi</label>
+                            <select
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={newPromoType}
+                              onChange={(e) => setNewPromoType(e.target.value)}
+                            >
+                              <option value="tokens">Tokenlar</option>
+                              <option value="monthly_starter">Starter (Obuna)</option>
+                              <option value="monthly_fandub">FanDub (Obuna)</option>
+                              <option value="monthly_studio">Studio (Obuna)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Qiymati / Limiti</label>
+                            <input
+                              type="number"
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={newPromoValue}
+                              onChange={(e) => setNewPromoValue(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Kun (Bo'sh=Cheksiz)</label>
+                            <input
+                              type="number"
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={newPromoDays}
+                              onChange={(e) => setNewPromoDays(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Ishlatish Limiti (0=cheksiz)</label>
+                            <input
+                              type="number"
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              placeholder="1"
+                              value={newPromoMaxUses}
+                              onChange={(e) => setNewPromoMaxUses(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleAddPromocode}
+                          className="bg-sky-500 hover:bg-sky-600 text-slate-950 font-extrabold text-xs px-3.5 py-1.5 rounded uppercase tracking-wider transition-colors cursor-pointer"
+                        >
+                          Promokod Yaratish
+                        </button>
+                      </div>
+                    </div>
 
 
                     {/* SubsPlease Pipeline Live Queue Status */}
@@ -2006,7 +2069,7 @@ export default function App() {
                         <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
                           <Activity className="w-3.5 h-3.5 text-sky-400 animate-pulse" /> SubsPlease Live Tracker (So'nggi 25 tasi)
                         </h3>
-                        <button 
+                        <button
                           onClick={fetchAutomatedAnimes}
                           className="text-[9px] bg-slate-800 hover:bg-slate-700 px-2 py-0.5 rounded text-slate-300 font-bold border border-slate-700"
                         >
@@ -2027,12 +2090,11 @@ export default function App() {
                                   <div className="text-xs font-bold text-white">{item.title}</div>
                                   <div className="text-[9px] text-slate-500">Epizod: {item.episode} | Yaratildi: {new Date(item.createdAt).toLocaleTimeString()}</div>
                                 </div>
-                                <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${
-                                  item.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                  item.status === 'TRANSLATING' ? 'bg-sky-500/10 text-sky-400 border border-sky-505/20 animate-pulse' :
-                                  item.status === 'DOWNLOADING' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                                  'bg-slate-850 text-slate-400 border border-slate-800'
-                                }`}>
+                                <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${item.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                    item.status === 'TRANSLATING' ? 'bg-sky-500/10 text-sky-400 border border-sky-505/20 animate-pulse' :
+                                      item.status === 'DOWNLOADING' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                                        'bg-slate-850 text-slate-400 border border-slate-800'
+                                  }`}>
                                   {item.status} ({item.progress}%)
                                 </span>
                               </div>
@@ -2070,7 +2132,7 @@ export default function App() {
                       <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                         <Users className="w-4 h-4 text-sky-400" /> Team Applications Pending and Approved status
                       </h3>
-                      <button 
+                      <button
                         onClick={fetchTeams}
                         className="text-[10px] bg-slate-800/50 hover:bg-slate-850 px-2.5 py-1.2 text-xs border border-slate-700 rounded text-slate-300 flex items-center gap-1 animate-none cursor-pointer"
                       >
@@ -2090,11 +2152,10 @@ export default function App() {
                               <div>
                                 <h4 className="text-xs font-bold text-white flex items-center gap-2">
                                   {team.name}
-                                  <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${
-                                    team.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                    team.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
-                                    'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                                  }`}>
+                                  <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${team.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                      team.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
+                                        'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                    }`}>
                                     {team.status}
                                   </span>
                                 </h4>
@@ -2104,7 +2165,7 @@ export default function App() {
                               <div className="flex gap-2">
                                 {team.status === 'PENDING' && (
                                   <>
-                                    <button 
+                                    <button
                                       onClick={() => {
                                         setEditingTeamId(team.id);
                                         setEditTokens(1000);
@@ -2114,7 +2175,7 @@ export default function App() {
                                     >
                                       <Check className="w-3.5 h-3.5" /> Ruxsat Berish
                                     </button>
-                                    <button 
+                                    <button
                                       onClick={() => handleUpdateTeamStatus(team.id, 'BLOCKED')}
                                       className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-extrabold text-[10px] h-7 px-3 rounded uppercase flex items-center gap-1 border border-rose-500/20 cursor-pointer"
                                     >
@@ -2123,7 +2184,7 @@ export default function App() {
                                   </>
                                 )}
                                 {team.status === 'APPROVED' && (
-                                  <button 
+                                  <button
                                     onClick={() => handleUpdateTeamStatus(team.id, 'BLOCKED')}
                                     className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-extrabold text-[10px] h-7 px-3 rounded uppercase flex items-center gap-1 border border-rose-500/20 cursor-pointer"
                                   >
@@ -2131,7 +2192,7 @@ export default function App() {
                                   </button>
                                 )}
                                 {team.status === 'BLOCKED' && (
-                                  <button 
+                                  <button
                                     onClick={() => handleUpdateTeamStatus(team.id, 'APPROVED', team.tokens, team.maxConcurrentJobs)}
                                     className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-[10px] h-7 px-3 rounded uppercase flex items-center gap-1 cursor-pointer"
                                   >
@@ -2147,8 +2208,8 @@ export default function App() {
                                 <div className="grid grid-cols-2 gap-3">
                                   <div>
                                     <label className="block text-[9px] text-slate-500 uppercase font-mono mb-1">Boshlang'ich Tokenlar</label>
-                                    <input 
-                                      type="number" 
+                                    <input
+                                      type="number"
                                       className="w-full bg-slate-900 border border-slate-800 text-xs px-2 py-1.5 focus:outline-none focus:border-sky-500 font-mono text-white rounded"
                                       value={editTokens}
                                       onChange={(e) => setEditTokens(Number(e.target.value))}
@@ -2156,7 +2217,7 @@ export default function App() {
                                   </div>
                                   <div>
                                     <label className="block text-[9px] text-slate-500 uppercase font-mono mb-1">Maksimal Parallel Sloti</label>
-                                    <select 
+                                    <select
                                       className="w-full bg-slate-900 border border-slate-800 text-xs px-2 py-1.5 focus:outline-none focus:border-sky-500 font-mono text-white rounded"
                                       value={editConcurrency}
                                       onChange={(e) => setEditConcurrency(Number(e.target.value))}
@@ -2170,13 +2231,13 @@ export default function App() {
                                   </div>
                                 </div>
                                 <div className="flex gap-2">
-                                  <button 
+                                  <button
                                     onClick={() => handleUpdateTeamStatus(team.id, 'APPROVED', editTokens, editConcurrency)}
                                     className="bg-sky-500 text-slate-950 text-[10px] font-extrabold h-7 px-3 rounded uppercase hover:bg-sky-600 transition-colors cursor-pointer"
                                   >
                                     Tasdiqlash
                                   </button>
-                                  <button 
+                                  <button
                                     onClick={() => setEditingTeamId(null)}
                                     className="bg-slate-850 text-slate-300 text-[10px] h-7 px-3 rounded hover:bg-slate-800 cursor-pointer"
                                   >
@@ -2213,7 +2274,7 @@ export default function App() {
                       <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                         <CreditCard className="w-4 h-4 text-sky-400" /> Payment & Screenshot Transactions Verification Queue
                       </h3>
-                      <button 
+                      <button
                         onClick={fetchPayments}
                         className="text-[10px] bg-slate-800/50 hover:bg-slate-850 px-2.5 py-1.2 text-xs border border-slate-700 rounded text-slate-300 flex items-center gap-1 cursor-pointer"
                       >
@@ -2232,11 +2293,10 @@ export default function App() {
                             <div className="space-y-1.5 flex-1 min-w-0">
                               <div className="flex items-center gap-2">
                                 <span className="text-xs font-bold text-white capitalize">{p.packName}</span>
-                                <span className={`px-2 py-0.2 rounded text-[8px] font-bold ${
-                                  p.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                  p.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
-                                  'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                                }`}>
+                                <span className={`px-2 py-0.2 rounded text-[8px] font-bold ${p.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                    p.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
+                                      'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                  }`}>
                                   {p.status}
                                 </span>
                               </div>
@@ -2253,13 +2313,13 @@ export default function App() {
                               <div className="flex flex-col items-center shrink-0 w-24 gap-1.5">
                                 <div className="text-[9px] font-mono text-slate-500 uppercase">Payment Receipt</div>
                                 <div className="w-20 h-24 bg-slate-950 border border-slate-800 rounded overflow-hidden relative group">
-                                  <img 
-                                    className="w-full h-full object-cover" 
-                                    src={`/api/telegram-file/${p.screenshotFileId}`} 
-                                    alt="Chek" 
+                                  <img
+                                    className="w-full h-full object-cover"
+                                    src={`/api/telegram-file/${p.screenshotFileId}`}
+                                    alt="Chek"
                                     referrerPolicy="no-referrer"
                                   />
-                                  <button 
+                                  <button
                                     onClick={() => setPreviewImage(`/api/telegram-file/${p.screenshotFileId}`)}
                                     className="absolute inset-0 bg-slate-950/80 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all rounded text-sky-400 text-xs"
                                   >
@@ -2272,13 +2332,13 @@ export default function App() {
                             <div className="flex flex-row sm:flex-col gap-2 shrink-0 self-stretch sm:justify-center">
                               {p.status === 'PENDING' && (
                                 <>
-                                  <button 
+                                  <button
                                     onClick={() => handleApprovePayment(p.id)}
                                     className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-[10px] h-8 px-3 rounded uppercase flex items-center justify-center gap-1 cursor-pointer flex-1"
                                   >
                                     <Check className="w-3.5 h-3.5" /> Tasdiqlash
                                   </button>
-                                  <button 
+                                  <button
                                     onClick={() => handleRejectPayment(p.id)}
                                     className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-extrabold text-[10px] h-8 px-3 border border-rose-500/20 rounded uppercase flex items-center justify-center gap-1 cursor-pointer flex-1"
                                   >
@@ -2337,14 +2397,13 @@ export default function App() {
 
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                         {locales.map((loc) => (
-                          <div 
+                          <div
                             key={loc.name}
                             onClick={() => setSelectedLang(loc.lang)}
-                            className={`p-2.5 rounded-lg border flex flex-col justify-between cursor-pointer transition-all ${
-                              selectedLang === loc.lang 
-                                ? 'bg-sky-500/10 border-sky-500/40 text-sky-400 font-bold' 
+                            className={`p-2.5 rounded-lg border flex flex-col justify-between cursor-pointer transition-all ${selectedLang === loc.lang
+                                ? 'bg-sky-500/10 border-sky-500/40 text-sky-400 font-bold'
                                 : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:border-slate-700'
-                            }`}
+                              }`}
                           >
                             <div className="flex items-center justify-between">
                               <span className="text-[11px] font-mono uppercase">{loc.lang}.yaml</span>
@@ -2377,7 +2436,7 @@ export default function App() {
                             <Upload className="w-3 h-3" /> Upload File
                             <input type="file" accept=".yaml,.yml" onChange={handleUploadYaml} className="hidden" />
                           </label>
-                          <button 
+                          <button
                             onClick={handleDownloadYaml}
                             className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-bold py-1 px-2.5 rounded flex items-center gap-1 cursor-pointer border border-slate-700"
                           >
@@ -2393,7 +2452,7 @@ export default function App() {
                         placeholder="Til kalitlari..."
                       />
 
-                      <button 
+                      <button
                         onClick={handleSaveYaml}
                         className="w-full bg-sky-500 hover:bg-sky-600 text-slate-950 font-extrabold text-xs h-9 rounded flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider transition-colors"
                       >
@@ -2675,9 +2734,8 @@ export default function App() {
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <span className="text-white font-bold truncate">@{item.username}</span>
                                   <span className="text-[9px] text-slate-600 bg-slate-900 px-1 py-0.2 rounded font-mono">ID: {item.id}</span>
-                                  <span className={`text-[9px] px-1 py-0.2 rounded font-mono uppercase ${
-                                    item.isBlocked ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'
-                                  }`}>
+                                  <span className={`text-[9px] px-1 py-0.2 rounded font-mono uppercase ${item.isBlocked ? 'bg-rose-500/10 text-rose-400' : 'bg-emerald-500/10 text-emerald-400'
+                                    }`}>
                                     {item.isBlocked ? 'BLOCKED' : 'ACTIVE'}
                                   </span>
                                 </div>
@@ -2691,11 +2749,10 @@ export default function App() {
                                 <div className="flex items-center gap-1">
                                   <button
                                     onClick={() => handleBlockUser(item.id, item.isBlocked)}
-                                    className={`py-1 px-2.5 flex-1 rounded text-[10px] font-bold select-none cursor-pointer duration-150 ${
-                                      item.isBlocked 
+                                    className={`py-1 px-2.5 flex-1 rounded text-[10px] font-bold select-none cursor-pointer duration-150 ${item.isBlocked
                                         ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/15'
                                         : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/15'
-                                    }`}
+                                      }`}
                                   >
                                     {item.isBlocked ? "Blokdan Ochish" : "Bloklash"}
                                   </button>
@@ -2828,13 +2885,12 @@ export default function App() {
                                   <td className="py-2.5 text-slate-400">{sess.loginTime}</td>
                                   <td className="py-2.5 text-emerald-400 font-semibold">{sess.lastActive}</td>
                                   <td className="py-2.5 text-right font-sans">
-                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${
-                                      sess.status === 'Faol' 
-                                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${sess.status === 'Faol'
+                                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                                         : sess.status === 'Chiqilgan'
-                                        ? 'bg-slate-500/10 text-slate-500 border border-slate-500/20'
-                                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                    }`}>
+                                          ? 'bg-slate-500/10 text-slate-500 border border-slate-500/20'
+                                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                      }`}>
                                       {sess.status}
                                     </span>
                                   </td>
@@ -2932,9 +2988,8 @@ export default function App() {
                                       {bk.filename}
                                     </td>
                                     <td className="py-2.5">
-                                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold tracking-wider ${
-                                        isDaily ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-sans' : 'bg-sky-500/10 text-sky-400 border border-sky-500/20 font-sans'
-                                      }`}>
+                                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold tracking-wider ${isDaily ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-sans' : 'bg-sky-500/10 text-sky-400 border border-sky-500/20 font-sans'
+                                        }`}>
                                         {isDaily ? 'AVTOMATIK (7_DAYS)' : 'MANUAL'}
                                       </span>
                                     </td>
@@ -2982,8 +3037,8 @@ export default function App() {
                 <span className="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">
                   {(() => {
                     const filtered = (logs || []).filter((log: any) => {
-                      const matchesSearch = !logsSearch.trim() || 
-                        (log.message || '').toLowerCase().includes(logsSearch.toLowerCase()) || 
+                      const matchesSearch = !logsSearch.trim() ||
+                        (log.message || '').toLowerCase().includes(logsSearch.toLowerCase()) ||
                         (log.type || '').toLowerCase().includes(logsSearch.toLowerCase());
                       const matchesType = logsTypeFilter === 'ALL' || log.type === logsTypeFilter;
                       return matchesSearch && matchesType;
@@ -3019,8 +3074,8 @@ export default function App() {
             <div className="flex-1 py-3 font-mono text-[11px] overflow-y-auto space-y-1.5 text-slate-400 max-h-[120px]">
               {(logs || [])
                 .filter((log: any) => {
-                  const matchesSearch = !logsSearch.trim() || 
-                    (log.message || '').toLowerCase().includes(logsSearch.toLowerCase()) || 
+                  const matchesSearch = !logsSearch.trim() ||
+                    (log.message || '').toLowerCase().includes(logsSearch.toLowerCase()) ||
                     (log.type || '').toLowerCase().includes(logsSearch.toLowerCase());
                   const matchesType = logsTypeFilter === 'ALL' || log.type === logsTypeFilter;
                   return matchesSearch && matchesType;
@@ -3028,12 +3083,11 @@ export default function App() {
                 .map((log: any, idx: number) => (
                   <div key={idx} className="flex gap-4">
                     <span className="text-slate-600 text-right w-16 select-none shrink-0">{log.time}</span>
-                    <span className={`font-bold shrink-0 ${
-                      log.type === 'GEMINI' ? 'text-sky-400' :
-                      log.type === 'SUCCESS' ? 'text-emerald-400' :
-                      log.type === 'ERROR' ? 'text-rose-400' :
-                      log.type === 'DB' ? 'text-yellow-400' : 'text-slate-500'
-                    }`}>
+                    <span className={`font-bold shrink-0 ${log.type === 'GEMINI' ? 'text-sky-400' :
+                        log.type === 'SUCCESS' ? 'text-emerald-400' :
+                          log.type === 'ERROR' ? 'text-rose-400' :
+                            log.type === 'DB' ? 'text-yellow-400' : 'text-slate-500'
+                      }`}>
                       [{log.type}]
                     </span>
                     <span className="text-slate-200">{log.message}</span>
@@ -3046,21 +3100,21 @@ export default function App() {
 
       {/* Screenshot full sized zoom Modal */}
       {previewImage && (
-        <div 
+        <div
           onClick={() => setPreviewImage(null)}
           className="fixed inset-0 bg-black/90 backdrop-blur-md flex items-center justify-center z-50 p-4 cursor-pointer"
         >
           <div className="max-w-md w-full max-h-[85vh] bg-slate-900 p-2 border border-slate-800 rounded-lg relative overflow-hidden" onClick={e => e.stopPropagation()}>
-            <button 
+            <button
               onClick={() => setPreviewImage(null)}
               className="absolute top-2 right-2 p-1 bg-black/50 hover:bg-black/80 rounded-full text-slate-300"
             >
               <X className="w-5 h-5" />
             </button>
-            <img 
-              className="w-full h-auto max-h-[75vh] object-contain rounded" 
-              src={previewImage} 
-              alt="Zoomed Chek" 
+            <img
+              className="w-full h-auto max-h-[75vh] object-contain rounded"
+              src={previewImage}
+              alt="Zoomed Chek"
               referrerPolicy="no-referrer"
             />
           </div>

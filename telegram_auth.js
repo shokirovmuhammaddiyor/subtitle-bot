@@ -38,7 +38,7 @@ export async function verifyCode(phone, code) {
     const sessionString = client.session.save();
     return { sessionString, needs2fa: false };
   } catch (err) {
-    if (err.message.includes("SESSION_PASSWORD_NEEDED")) {
+    if (err.message.includes("SESSION_PASSWORD_NEEDED") || (err.errorMessage && err.errorMessage.includes("SESSION_PASSWORD_NEEDED"))) {
       return { needs2fa: true };
     }
     throw err;

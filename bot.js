@@ -491,18 +491,22 @@ app.get('/api/config', async (req, res) => {
     storage_channel_id: settings.storage_channel_id || '',
     cardNumber: settings.cardNumber || '',
     cardOwner: settings.cardOwner || '',
-    packages: settings.packages || []
+    packages: settings.packages || [],
+    telegramApiId: process.env.TELEGRAM_API_ID || '',
+    telegramApiHash: process.env.TELEGRAM_API_HASH || ''
   });
 });
 
 app.post('/api/config', async (req, res) => {
   try {
-    const { botToken, geminiApiKey, defaultBatchSize, systemPrompt, auto_download_enabled, storage_channel_id, cardNumber, cardOwner, packages } = req.body;
+    const { botToken, geminiApiKey, defaultBatchSize, systemPrompt, auto_download_enabled, storage_channel_id, cardNumber, cardOwner, packages, telegramApiId, telegramApiHash } = req.body;
     process.env.BOT_TOKEN = botToken;
     process.env.GEMINI_API_KEY = geminiApiKey;
     process.env.DEFAULT_BATCH_SIZE = defaultBatchSize;
+    process.env.TELEGRAM_API_ID = telegramApiId;
+    process.env.TELEGRAM_API_HASH = telegramApiHash;
 
-    const envContent = `BOT_TOKEN=${botToken}\nGEMINI_API_KEY=${geminiApiKey}\nDEFAULT_BATCH_SIZE=${defaultBatchSize}\nPORT=3000\n`;
+    const envContent = `BOT_TOKEN=${botToken}\nGEMINI_API_KEY=${geminiApiKey}\nDEFAULT_BATCH_SIZE=${defaultBatchSize}\nPORT=3000\nTELEGRAM_API_ID=${telegramApiId || ''}\nTELEGRAM_API_HASH=${telegramApiHash || ''}\n`;
     await fs.writeFile('.env', envContent, 'utf-8');
 
     await db.updateSettings({
@@ -877,16 +881,18 @@ app.get('/api/admin/telegram-client/status', async (req, res) => {
 app.post('/api/admin/telegram-client/send-code', async (req, res) => {
   try {
     const { phone, apiId, apiHash } = req.body;
-    if (!phone || !apiId || !apiHash) {
+    const finalApiId = apiId || process.env.TELEGRAM_API_ID;
+    const finalApiHash = apiHash || process.env.TELEGRAM_API_HASH;
+    if (!phone || !finalApiId || !finalApiHash) {
       return res.status(400).json({ error: 'Telegram Telefon raqami, API ID va API Hash kiritilishi shart' });
     }
     const s = await db.getSettings();
-    await sendCode(phone.trim(), apiId.trim(), apiHash.trim());
+    await sendCode(phone.trim(), String(finalApiId).trim(), String(finalApiHash).trim());
     s.telegram_account = {
       phone: phone.trim(),
       status: 'AWAITING_CODE',
-      apiId: apiId.trim(),
-      apiHash: apiHash.trim(),
+      apiId: String(finalApiId).trim(),
+      apiHash: String(finalApiHash).trim(),
       session: null,
       createdAt: Date.now()
     };
@@ -909,9 +915,9 @@ app.post('/api/admin/telegram-client/verify-code', async (req, res) => {
     }
     const result = await verifyCode(s.telegram_account.phone, code.trim());
     if (result.needs2fa) {
-      s.telegram_account.status = 'AWAITING_PASSWORD';
+      s.telegram_account.status = 'AWAITING_2FA';
       await db.save();
-      return res.json({ success: true, status: 'AWAITING_PASSWORD', needs2fa: true });
+      return res.json({ success: true, status: 'AWAITING_2FA', needs2fa: true });
     }
     s.telegram_account.status = 'CONNECTED';
     s.telegram_account.session = result.sessionString;
