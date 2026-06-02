@@ -1,0 +1,67 @@
+{
+  "users": [],
+  "projects": [],
+  "episodes": [],
+  "teams": [],
+  "payments": [],
+  "ratings": [],
+  "settings": {
+    "defaultBatchSize": 45,
+    "systemPrompt": "Sen professional subtitr tarjimoni va o'zbek tiliga mahalliylashtirish mutaxassisisan. Vazifang berilgan matnlarni yuqori sifatli, tabiiy va dublyajbop o'zbek tiliga tarjima qilish.\n\nHozirgi loyiha nomi: {movie_name}\nQism raqami: {episode_number}-qism\n\nQuyidagi qoidalarga qat'iy amal qil:\n1. \"Sen\" va \"Siz\" munosabatlari (Muhim):\n- Do'stlar, tengdoshlar va oila a'zolari o'rtasida o'ta jonli, tabiiy o'zbek tilini ta'minlash uchun \"SEN\" munosabatidan foydalan.\n- Faqatgina ota-onaga, kattalarga, boshliq va notanish shaxslarga murojaatda \"SIZ\" shaklini qo'lla. Bir muloqot davomida tanlangan uslubni o'zgartirma.\n2. Dublyajbop va Tabiiy oqim:\n- So'zma-so'z, kitobiy tarjimadan qoch. Qator uzunligi va timing asl holatga yaqin saqlansin.\n3. His-tuyg'u va Jargonlar:\n- Sahnadagi har bir hissiyotni (hazil, kesatiq, taranglik) mos o'zbekcha ibora va jargonlar bilan boyit.",
+    "cardNumber": "8600 1234 5678 9012",
+    "cardOwner": "Sherzodbek To'xtasinov",
+    "packages": [
+      {
+        "id": "pack_1000",
+        "name": "1,000 dona Token",
+        "type": "tokens",
+        "value": 1000,
+        "price": "15,000 O'zS"
+      },
+      {
+        "id": "pack_5000",
+        "name": "5,000 dona Token",
+        "type": "tokens",
+        "value": 5000,
+        "price": "60,000 O'zS"
+      },
+      {
+        "id": "pack_15000",
+        "name": "15,000 dona Token",
+        "type": "tokens",
+        "value": 15000,
+        "price": "150,000 O'zS"
+      },
+      {
+        "id": "monthly_starter",
+        "name": "Boshlang'ich (Oxirgi 10 ta Subtitle)",
+        "type": "monthly_starter",
+        "value": 10,
+        "price": "50,000 O'zS"
+      },
+      {
+        "id": "monthly_fandub",
+        "name": "FanDub (Oxirgi 25 ta Subtitle)",
+        "type": "monthly_fandub",
+        "value": 25,
+        "price": "120,000 O'zS"
+      },
+      {
+        "id": "monthly_studio",
+        "name": "Studio (Oxirgi 50 ta Subtitle)",
+        "type": "monthly_studio",
+        "value": 50,
+        "price": "200,000 O'zS"
+      }
+    ],
+    "auto_download_enabled": false,
+    "storage_channel_id": "",
+    "telegram_account": {
+      "phone": "",
+      "status": "DISCONNECTED",
+      "session": null
+    }
+  },
+  "automatedAnimes": [],
+  "promocodes": []
+}
