@@ -8,7 +8,7 @@ export async function sendCode(phone, apiId, apiHash) {
   const client = new TelegramClient(stringSession, Number(apiId), apiHash, {
     connectionRetries: 5,
   });
-  
+
   await client.connect();
   const result = await client.sendCode(
     {
@@ -17,7 +17,7 @@ export async function sendCode(phone, apiId, apiHash) {
     },
     phone
   );
-  
+
   clients.set(phone, { client, phoneCodeHash: result.phoneCodeHash, apiId, apiHash });
   return result;
 }
@@ -26,10 +26,10 @@ export async function verifyCode(phone, code) {
   const data = clients.get(phone);
   if (!data) throw new Error("Client not found for phone");
   const { client, phoneCodeHash } = data;
-  
+
   try {
     await client.invoke(
-      new Api.auth.signIn({
+      new Api.auth.SignIn({
         phoneNumber: phone,
         phoneCodeHash: phoneCodeHash,
         phoneCode: code,
@@ -49,13 +49,13 @@ export async function verify2fa(phone, password) {
   const data = clients.get(phone);
   if (!data) throw new Error("Client not found for phone");
   const { client } = data;
-  
-  const { computeCheck } = await import("telegram/password.js");
-  
-  const passwordData = await client.invoke(new Api.account.getPassword());
-  
+
+  const { computeCheck } = await import("telegram/Password.js");
+
+  const passwordData = await client.invoke(new Api.account.GetPassword());
+
   await client.invoke(
-    new Api.auth.checkPassword({
+    new Api.auth.CheckPassword({
       password: await computeCheck(passwordData, password),
     })
   );

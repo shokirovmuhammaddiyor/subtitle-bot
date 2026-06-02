@@ -6,8 +6,6 @@ import { Telegraf, Markup } from 'telegraf';
 import express from 'express';
 import { sendCode, verifyCode, verify2fa } from './telegram_auth.js';
 import { getConnectedClient } from './get_client.mjs';
-import { Api } from 'telegram';
-import { CustomFile } from 'telegram/client/uploads.js';
 import yaml from 'js-yaml';
 import fs from 'fs/promises';
 import path from 'path';
@@ -44,7 +42,7 @@ if (db && db.data) {
       session: null
     };
   }
-  
+
   if (db.data.automatedAnimes.length === 0) {
     db.data.automatedAnimes = [];
     db.save();
@@ -95,7 +93,7 @@ function getLocaleByCtx(ctx) {
       userLang = (ctx?.from?.language_code || 'uz').toLowerCase();
     }
   }
-  
+
   if (userLang.startsWith('uz')) userLang = 'uz';
   if (userLang.startsWith('ru')) userLang = 'ru';
   if (userLang.startsWith('en')) userLang = 'en';
@@ -132,7 +130,7 @@ const validateLocaleYaml = async (yamlText) => {
   } catch (err) {
     throw new Error(`YAML syntax error: ${err.message}`);
   }
-  
+
   if (!parsed || typeof parsed !== 'object') {
     throw new Error("YAML format must be a valid key-value object structure.");
   }
@@ -158,7 +156,7 @@ async function runBackupProcedure() {
     await fs.mkdir('backups', { recursive: true });
     const todayStr = new Date().toISOString().slice(0, 10);
     const backupPath = path.join('backups', `backup_${todayStr}.json`);
-    
+
     // Read current db.json content
     let dbContent;
     try {
@@ -332,14 +330,14 @@ let activeJobs = [];
 app.get('/api/stats', async (req, res) => {
   const settings = await db.getSettings();
   const ratings = db.data.ratings || [];
-  
+
   // Calculate average rating
   let averageRating = 0.0;
   if (ratings.length > 0) {
     const sum = ratings.reduce((acc, r) => acc + (r.rating || 5), 0);
     averageRating = Number((sum / ratings.length).toFixed(2));
   }
-  
+
   // Calculate distribution
   const ratingsDistribution = { '5': 0, '4': 0, '3': 0, '2': 0, '1': 0 };
   for (const r of ratings) {
@@ -418,7 +416,7 @@ app.get('/api/locales/:lang', async (req, res) => {
     const { lang } = req.params;
     const cleanLang = lang.replace(/[^a-zA-Z0-9_\-]/g, '');
     const plainPath = path.join('locales', `${cleanLang}.yaml`);
-    
+
     const exists = await fs.access(plainPath).then(() => true).catch(() => false);
     if (!exists) {
       return res.status(404).json({ error: `Locale not found: ${lang}` });
@@ -436,7 +434,7 @@ app.post('/api/locales/:lang', async (req, res) => {
     const { lang } = req.params;
     const { content } = req.body;
     const cleanLang = lang.toLowerCase().replace(/[^a-zA-Z0-9_\-]/g, '');
-    
+
     // Perform verification checks
     try {
       await validateLocaleYaml(content);
@@ -448,7 +446,7 @@ app.post('/api/locales/:lang', async (req, res) => {
     const targetPath = path.join('locales', `${cleanLang}.yaml`);
     await fs.writeFile(targetPath, content, 'utf8');
     await loadAllLocales();
-    
+
     logEvent('SUCCESS', `Successfully added/updated locale file: ${cleanLang}.yaml`);
     res.json({ success: true });
   } catch (err) {
@@ -461,7 +459,7 @@ app.delete('/api/locales/:lang', async (req, res) => {
   try {
     const { lang } = req.params;
     const cleanLang = lang.toLowerCase().replace(/[^a-zA-Z0-9_\-]/g, '');
-    
+
     if (cleanLang === 'uz') {
       return res.status(400).json({ error: "Birlamchi til 'uz.yaml' faylini o'chirib bo'lmaydi." });
     }
@@ -654,19 +652,19 @@ app.post('/api/teams/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { status, tokens, maxConcurrentJobs } = req.body;
-    const team = await db.updateTeam(id, { 
-      status, 
-      tokens: Number(tokens), 
-      maxConcurrentJobs: Number(maxConcurrentJobs) 
+    const team = await db.updateTeam(id, {
+      status,
+      tokens: Number(tokens),
+      maxConcurrentJobs: Number(maxConcurrentJobs)
     });
-    
+
     if (activeBotInstance && team) {
       const statusText = status === 'APPROVED' ? "tasdiqlandi va ruxsat berildi! 🎉" : "rad etildi yoki bloklandi. ❌";
       try {
         await activeBotInstance.telegram.sendMessage(team.ownerId, `Sizning '${team.name}' jamoangiz administrator tomonidan ${statusText}`);
-      } catch (e) {}
+      } catch (e) { }
     }
-    
+
     res.json({ success: true, team });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -682,12 +680,12 @@ app.post('/api/payments/:id/approve', async (req, res) => {
     const { id } = req.params;
     const ok = await db.approvePayment(id);
     if (!ok) return res.status(404).json({ error: "To'lov topilmadi yoki allaqachon bajarilgan" });
-    
+
     const payment = db.data.payments.find(p => p.id === id);
     if (activeBotInstance && payment) {
       try {
         await activeBotInstance.telegram.sendMessage(payment.userId, `Sizning to'lovingiz tasdiqlandi! Jamoangiz hisobiga paket/tokenlar muvaffaqiyatli qo'shildi. 🎉`);
-      } catch (e) {}
+      } catch (e) { }
     }
     res.json({ success: true });
   } catch (err) {
@@ -704,7 +702,7 @@ app.post('/api/payments/:id/reject', async (req, res) => {
     if (activeBotInstance && payment) {
       try {
         await activeBotInstance.telegram.sendMessage(payment.userId, `Sizning to'lovingiz rad etildi! Iltimos, o'tkazma ma'lumotlarini tekshirib qaytadan urinib ko'ring yoki adminga yozing. ❌`);
-      } catch (e) {}
+      } catch (e) { }
     }
     res.json({ success: true });
   } catch (err) {
@@ -754,7 +752,7 @@ app.post('/api/admin/users/:userId/kick', async (req, res) => {
       if (activeBotInstance) {
         try {
           await activeBotInstance.telegram.sendMessage(userId, "Siz jamoangizdan chetlatildingiz! / Вы были исключены из команды!");
-        } catch (e) {}
+        } catch (e) { }
       }
     }
     res.json({ success: true });
@@ -794,7 +792,7 @@ app.post('/api/admin/teams/:teamId/tokens', async (req, res) => {
       if (activeBotInstance) {
         try {
           await activeBotInstance.telegram.sendMessage(team.ownerId, `🔔 Balans o'zgardi!\n\nTizim administratori jamoa balansini o'zgartirdi:\nFarq: ${amount > 0 ? '+' : ''}${amount} Token\nYangi balans: ${team.tokens} Token`);
-        } catch (e) {}
+        } catch (e) { }
       }
       res.json({ success: true, team });
     } else {
@@ -826,7 +824,7 @@ app.post('/api/admin/broadcast', async (req, res) => {
       try {
         await activeBotInstance.telegram.sendMessage(uId, `📣 E'LON / ОБЪЯВЛЕНИЕ / PUBLIC BROADCAST:\n\n${message}`);
         sentCount++;
-      } catch (err) {}
+      } catch (err) { }
     }
 
     logEvent('SUCCESS', `${sentCount} ta foydalanuvchiga e'lon yuborildi.`);
@@ -990,13 +988,13 @@ app.delete('/api/admin/promocodes/:id', async (req, res) => {
 });
 
 app.get('/api/admin/automated-animes'
-, async (req, res) => {
-  try {
-    res.json(db.data.automatedAnimes || []);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+  , async (req, res) => {
+    try {
+      res.json(db.data.automatedAnimes || []);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
 if (process.env.NODE_ENV !== 'production') {
   const { createServer: createViteServer } = await import('vite');
@@ -1017,7 +1015,7 @@ app.listen(3000, '0.0.0.0', () => {
   console.log(`\n  🚀 SubTrans Server successfully started!`);
   console.log(`  -----------------------------------------`);
   console.log(`  Local:            http://localhost:3000`);
-  
+
   const interfaces = os.networkInterfaces();
   let ipFound = false;
   for (const name of Object.keys(interfaces)) {
@@ -1056,7 +1054,7 @@ async function restartBot(token) {
     logEvent('INFO', 'Initializing fresh Telegraf Bot instance...');
     const bot = new Telegraf(token);
     setupBotHandlers(bot);
-    
+
     bot.launch()
       .then(() => {
         logEvent('SUCCESS', 'Telegram Bot successfully started and listening to updates!');
@@ -1064,7 +1062,7 @@ async function restartBot(token) {
       .catch((err) => {
         logEvent('ERROR', `Telegraf launch error: ${err.message}. Ensure the token is correct.`);
       });
-    
+
     activeBotInstance = bot;
   } catch (err) {
     logEvent('ERROR', `Failed to construct Telegraf: ${err.message}`);
@@ -1077,27 +1075,27 @@ function setupBotHandlers(bot) {
     try {
       const codeArr = ctx.message.text.split(' ');
       if (codeArr.length < 2) {
-         return ctx.reply("🎁 Promokoddan foydalanish uchun quyidagicha yozing:\n/promo <promokod>");
+        return ctx.reply("🎁 Promokoddan foydalanish uchun quyidagicha yozing:\n/promo <promokod>");
       }
       const promoCode = codeArr[1];
       const user = await db.getUser(ctx.from.id);
       if (!user.teamId) {
-         return ctx.reply("Promokoddan foydalanish uchun siz biror jamoa a'zosi bo'lishingiz kerak. Avval jamoa yarating yoki qo'shiling.");
+        return ctx.reply("Promokoddan foydalanish uchun siz biror jamoa a'zosi bo'lishingiz kerak. Avval jamoa yarating yoki qo'shiling.");
       }
-      
+
       const result = await db.usePromocode(promoCode, user.teamId);
       if (result.success) {
-         const promo = result.promo;
-         let text = "✅ Promokod muvaffaqiyatli ishlatildi!\n\n";
-         if (promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
-            text += 'Sizning jamoangiz obunasi faollashtirildi.';
-         } else {
-            text += 'Jamoangiz hisobiga ' + promo.value + " token qo'shildi.";
-         }
-         await ctx.reply(text);
-         logEvent('SUCCESS', 'Jamoa (' + user.teamId + ') promo ishlatdi: ' + promoCode);
+        const promo = result.promo;
+        let text = "✅ Promokod muvaffaqiyatli ishlatildi!\n\n";
+        if (promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
+          text += 'Sizning jamoangiz obunasi faollashtirildi.';
+        } else {
+          text += 'Jamoangiz hisobiga ' + promo.value + " token qo'shildi.";
+        }
+        await ctx.reply(text);
+        logEvent('SUCCESS', 'Jamoa (' + user.teamId + ') promo ishlatdi: ' + promoCode);
       } else {
-         await ctx.reply("❌ Xatolik: " + result.error);
+        await ctx.reply("❌ Xatolik: " + result.error);
       }
     } catch (e) {
       console.error(e);
@@ -1110,13 +1108,13 @@ function setupBotHandlers(bot) {
       await ctx.answerCbQuery();
       const user = await db.getUser(ctx.from.id);
       if (!user.teamId) {
-         return ctx.reply("Jamoaga a'zo bo'ling.");
+        return ctx.reply("Jamoaga a'zo bo'ling.");
       }
       await db.updateUser(user.id, { state: 'AWAITING_PROMO' });
       await ctx.reply("🎁 Iltimos, promokodni yuboring:", Markup.inlineKeyboard([
         [Markup.button.callback("⬅️ Bekor qilish", 'cancel_promo')]
       ]));
-    } catch (e) {}
+    } catch (e) { }
   });
 
   bot.action('cancel_promo', async (ctx) => {
@@ -1125,7 +1123,7 @@ function setupBotHandlers(bot) {
       await db.updateUser(ctx.from.id, { state: 'IDLE' });
       const user = await db.getUser(ctx.from.id);
       await sendTeamMenu(ctx, user);
-    } catch (e) {}
+    } catch (e) { }
   });
 
   // Middleware to block/ban users
@@ -1141,7 +1139,7 @@ function setupBotHandlers(bot) {
             } else {
               await ctx.reply("Siz botdan blocklangansiz! / Вы заблокированы в боте! / You are blocked from this bot!");
             }
-          } catch (e) {}
+          } catch (e) { }
           return; // Terminate request
         }
       }
@@ -1171,7 +1169,7 @@ function setupBotHandlers(bot) {
         [Markup.button.callback(loc.btn_check_status || "🔄 Holatni tekshirish", 'btn_check_status')]
       ]);
       if (edit) {
-        try { return await ctx.editMessageText(pendingText, kb); } catch (e) {}
+        try { return await ctx.editMessageText(pendingText, kb); } catch (e) { }
       }
       return ctx.reply(pendingText, kb);
     }
@@ -1179,7 +1177,7 @@ function setupBotHandlers(bot) {
     if (team.status === 'BLOCKED') {
       const blockedText = loc.team_blocked || "Sizning jamoangiz bloklandi! Iltimos, administrator bilan bog'laning.";
       if (edit) {
-        try { return await ctx.editMessageText(blockedText); } catch (e) {}
+        try { return await ctx.editMessageText(blockedText); } catch (e) { }
       }
       return ctx.reply(blockedText);
     }
@@ -1199,7 +1197,7 @@ function setupBotHandlers(bot) {
     ]);
 
     if (edit) {
-      try { return await ctx.editMessageText(menuTitle, kb); } catch (e) {}
+      try { return await ctx.editMessageText(menuTitle, kb); } catch (e) { }
     }
     return ctx.reply(menuTitle, kb);
   }
@@ -1213,7 +1211,7 @@ function setupBotHandlers(bot) {
       [Markup.button.callback(loc.action_enter_code || "🔑 Kod Orqali Kirish", 'action_enter_code')]
     ]);
     if (edit) {
-      try { return await ctx.editMessageText(text, kb); } catch (e) {}
+      try { return await ctx.editMessageText(text, kb); } catch (e) { }
     }
     await ctx.reply(text, kb);
   }
@@ -1261,24 +1259,24 @@ function setupBotHandlers(bot) {
       await ctx.answerCbQuery();
       const lang = ctx.match[1];
       const userId = ctx.from.id;
-      const user = await db.updateUser(userId, { 
+      const user = await db.updateUser(userId, {
         interfaceLanguage: lang,
         username: ctx.from.username || ctx.from.first_name || String(userId)
       });
-      
+
       const welcomeMsgs = {
         uz: "Muvaffaqiyatli tanlandi! Bot o'zbek tilida ishlaydi. 🇺🇿",
         ru: "Успешно выбрано! Бот теперь работает на русском. 🇷🇺",
         en: "Successfully selected! Bot is now operating in English. 🇬🇧"
       };
-      
+
       const welcomeText = welcomeMsgs[lang] || welcomeMsgs.uz;
       try {
         await ctx.editMessageText(welcomeText);
       } catch (err) {
         await ctx.reply(welcomeText);
       }
-      
+
       const payload = user.interfaceLanguagePendingPayload || '';
       if (payload) {
         await db.updateUser(userId, { interfaceLanguagePendingPayload: '' });
@@ -1297,7 +1295,7 @@ function setupBotHandlers(bot) {
           ]));
         }
       }
-      
+
       return sendTeamMenu(ctx, user);
     } catch (e) {
       console.error(e);
@@ -1307,7 +1305,7 @@ function setupBotHandlers(bot) {
   bot.command('start', async (ctx) => {
     try {
       const userId = ctx.from.id;
-      
+
       // Update basic user profile metadata on startup
       const user = await db.updateUser(userId, {
         username: ctx.from.username || ctx.from.first_name || String(userId),
@@ -1522,7 +1520,7 @@ function setupBotHandlers(bot) {
     const now = new Date();
     const hasSub = team.activeSubscription && (!team.subscriptionExpiresAt || new Date(team.subscriptionExpiresAt) > now);
     if (!hasSub) return 0;
-    
+
     const pack = (settings.packages || []).find(p => p.type === team.activeSubscription || p.id === team.activeSubscription);
     if (pack) {
       return parseInt(pack.value) || 0;
@@ -1551,13 +1549,13 @@ function setupBotHandlers(bot) {
       const limit = getSubscriptionLimit(team, settings);
       if (limit <= 0) {
         const purchaseText = "⚠️ **Sizda faol Oylik Paket mavjud emas!**\n\n" +
-                             "Mavjud yangi anime subtitrlarini ko'rish va yuklab olish uchun jamoangiz nomidan oylik tariflardan birini faollashtiring.\n\n" +
-                             "**Mavjud Oylik Tariflar (SubsPlease):**\n" +
-                             "• **Boshlang'ich** - So'nggi 10 ta yangi anime qismlari (Narxi: 50,000 O'zS)\n" +
-                             "• **FanDub** - So'nggi 25 ta yangi anime qismlari (Narxi: 120,000 O'zS)\n" +
-                             "• **Studio** - So'nggi 50 ta yangi anime qismlari (Narxi: 200,000 O'zS)\n\n" +
-                             "Tarif sotib olish uchun jamoa hisobini to'ldirish bo'limiga o'ting:";
-                             
+          "Mavjud yangi anime subtitrlarini ko'rish va yuklab olish uchun jamoangiz nomidan oylik tariflardan birini faollashtiring.\n\n" +
+          "**Mavjud Oylik Tariflar (SubsPlease):**\n" +
+          "• **Boshlang'ich** - So'nggi 10 ta yangi anime qismlari (Narxi: 50,000 O'zS)\n" +
+          "• **FanDub** - So'nggi 25 ta yangi anime qismlari (Narxi: 120,000 O'zS)\n" +
+          "• **Studio** - So'nggi 50 ta yangi anime qismlari (Narxi: 200,000 O'zS)\n\n" +
+          "Tarif sotib olish uchun jamoa hisobini to'ldirish bo'limiga o'ting:";
+
         const buttons = [
           [Markup.button.callback("💳 Jamoa hisobini to'ldirish", "action_team_balance")],
           [Markup.button.callback("⬅️ Orqaga", "back_to_menu")]
@@ -1572,7 +1570,7 @@ function setupBotHandlers(bot) {
 
       const list = db.data.automatedAnimes || [];
       const completedList = list.filter(item => item.status === 'COMPLETED' && item.visible !== false);
-      
+
       // Sort descending by createdAt to make sure latest are first
       completedList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
@@ -1663,7 +1661,7 @@ function setupBotHandlers(bot) {
   bot.action('action_new_subtitles_noop', async (ctx) => {
     try {
       await ctx.answerCbQuery();
-    } catch (e) {}
+    } catch (e) { }
   });
 
   bot.action(/dl_ep_(.+)/, async (ctx) => {
@@ -1672,7 +1670,7 @@ function setupBotHandlers(bot) {
       const epId = ctx.match[1];
       const list = db.data.automatedAnimes || [];
       const item = list.find(a => a.id === epId);
-      
+
       if (!item) {
         return ctx.reply("Subtitr ma'lumotlari topilmadi!", Markup.inlineKeyboard([
           [Markup.button.callback("⬅️ Orqaga", "action_new_subtitles")]
@@ -1683,7 +1681,7 @@ function setupBotHandlers(bot) {
       const team = await db.getTeam(user.teamId);
       const settings = await db.getSettings();
       const limit = getSubscriptionLimit(team, settings);
-      
+
       const completedList = list.filter(item => item.status === 'COMPLETED' && item.visible !== false);
       completedList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       const allowedList = completedList.slice(0, limit);
@@ -1709,23 +1707,23 @@ function setupBotHandlers(bot) {
           disable_web_page_preview: true,
           ...Markup.inlineKeyboard(buttons)
         });
-      } catch (_) {}
+      } catch (_) { }
 
-      
+
       // Send MKV Document directly
       if (item.mkvFileId && item.mkvFileId !== 'simulated_mkv_file_id') {
         try {
           const settings = await db.getSettings();
           if (typeof item.mkvFileId === 'number' || (typeof item.mkvFileId === 'string' && !isNaN(item.mkvFileId) && item.mkvFileId.length < 15)) {
-             // It's a message ID from GramJS
-             await ctx.telegram.copyMessage(ctx.chat.id, settings.storage_channel_id, Number(item.mkvFileId), {
-                caption: `🎬 [MKV Video] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
-             });
+            // It's a message ID from GramJS
+            await ctx.telegram.copyMessage(ctx.chat.id, settings.storage_channel_id, Number(item.mkvFileId), {
+              caption: `🎬 [MKV Video] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
+            });
           } else {
-             // It's a normal file_id
-             await ctx.replyWithDocument(item.mkvFileId, {
-                caption: `🎬 [MKV Video] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
-             });
+            // It's a normal file_id
+            await ctx.replyWithDocument(item.mkvFileId, {
+              caption: `🎬 [MKV Video] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
+            });
           }
         } catch (e) {
           await ctx.replyWithDocument({
@@ -1748,21 +1746,21 @@ function setupBotHandlers(bot) {
       const tracks = item.tracks && item.tracks.length > 0 ? item.tracks : ["English (ASS)"];
       for (const trackName of tracks) {
         const subTrackName = item.subName.replace('.ass', ` [${trackName.split(' ')[0]} - UZ].ass`);
-        
-        
+
+
         if (item.subFileId && item.subFileId !== 'simulated_sub_file_id') {
           try {
-             const settings = await db.getSettings();
-             if (typeof item.subFileId === 'number' || (typeof item.subFileId === 'string' && !isNaN(item.subFileId) && item.subFileId.length < 15)) {
-                // It's a message ID from GramJS
-                await ctx.telegram.copyMessage(ctx.chat.id, settings.storage_channel_id, Number(item.subFileId), {
-                   caption: `📝 [O'ZBEKCHA: ${trackName}] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
-                });
-             } else {
-                await ctx.replyWithDocument(item.subFileId, {
-                  caption: `📝 [O'ZBEKCHA: ${trackName}] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
-                });
-             }
+            const settings = await db.getSettings();
+            if (typeof item.subFileId === 'number' || (typeof item.subFileId === 'string' && !isNaN(item.subFileId) && item.subFileId.length < 15)) {
+              // It's a message ID from GramJS
+              await ctx.telegram.copyMessage(ctx.chat.id, settings.storage_channel_id, Number(item.subFileId), {
+                caption: `📝 [O'ZBEKCHA: ${trackName}] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
+              });
+            } else {
+              await ctx.replyWithDocument(item.subFileId, {
+                caption: `📝 [O'ZBEKCHA: ${trackName}] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
+              });
+            }
           } catch (docErr) {
             const mockContent = `[Script Info]\nTitle: @${ctx.botInfo.username} - ${item.title} - Ep ${item.episode} (${trackName})\n\n[Events]\nDialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,Bu o'zbekcha tarjima qilingan ${trackName} subtitridir!`;
             await ctx.replyWithDocument({
@@ -1801,7 +1799,7 @@ function setupBotHandlers(bot) {
       for (const memberId of team.members) {
         const mUser = await db.getUser(memberId);
         const nameLabel = mUser.username ? `@${mUser.username}` : `Foydalanuvchi #${mUser.id}`;
-        
+
         if (memberId === team.ownerId) {
           msgText += `👑 **Administrator:** ${nameLabel}\n`;
         } else {
@@ -1857,7 +1855,7 @@ function setupBotHandlers(bot) {
         await db.removeUserFromTeam(team.id, targetId);
         try {
           await ctx.telegram.sendMessage(targetId, `Siz '${team.name}' jamoasidan chetlatildingiz.`);
-        } catch (mErr) {}
+        } catch (mErr) { }
         await ctx.reply(`A'zo jamoadan chiqarib yuborildi.`);
       }
       const refreshedUser = await db.getUser(ctx.from.id);
@@ -2132,7 +2130,7 @@ function setupBotHandlers(bot) {
   bot.action('btn_back_projects', async (ctx) => {
     try {
       await ctx.answerCbQuery();
-      try { await ctx.deleteMessage(); } catch (e) {}
+      try { await ctx.deleteMessage(); } catch (e) { }
       const user = await db.getUser(ctx.from.id);
       await sendTeamMenu(ctx, user);
     } catch (e) {
@@ -2145,7 +2143,7 @@ function setupBotHandlers(bot) {
       await ctx.answerCbQuery();
       const userId = ctx.from.id;
       await db.updateUser(userId, { state: 'IDLE', currentSession: null });
-      try { await ctx.deleteMessage(); } catch (e) {}
+      try { await ctx.deleteMessage(); } catch (e) { }
       await ctx.reply("Tarjima qilish bekor qilindi. ❌");
       const user = await db.getUser(userId);
       await sendTeamMenu(ctx, user);
@@ -2209,22 +2207,22 @@ function setupBotHandlers(bot) {
       const user = await db.getUser(userId);
       const loc = getLocaleByCtx(ctx);
 
-      
+
       if (user.state === 'AWAITING_PROMO') {
         const promoCode = ctx.message.text.trim();
         const result = await db.usePromocode(promoCode, user.teamId);
         if (result.success) {
-           const promo = result.promo;
-           let text = "✅ Promokod muvaffaqiyatli ishlatildi!\n\n";
-           if (promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
-              text += 'Sizning jamoangiz obunasi faollashtirildi.';
-           } else {
-              text += 'Jamoangiz hisobiga ' + promo.value + " token qo'shildi.";
-           }
-           await ctx.reply(text);
-           logEvent('SUCCESS', 'Jamoa (' + user.teamId + ') promo ishlatdi: ' + promoCode);
+          const promo = result.promo;
+          let text = "✅ Promokod muvaffaqiyatli ishlatildi!\n\n";
+          if (promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
+            text += 'Sizning jamoangiz obunasi faollashtirildi.';
+          } else {
+            text += 'Jamoangiz hisobiga ' + promo.value + " token qo'shildi.";
+          }
+          await ctx.reply(text);
+          logEvent('SUCCESS', 'Jamoa (' + user.teamId + ') promo ishlatdi: ' + promoCode);
         } else {
-           await ctx.reply("❌ Xatolik: " + result.error);
+          await ctx.reply("❌ Xatolik: " + result.error);
         }
         await db.updateUser(userId, { state: 'IDLE' });
         await sendTeamMenu(ctx, await db.getUser(userId));
@@ -2234,7 +2232,7 @@ function setupBotHandlers(bot) {
       if (ctx.message.photo && user.state === 'AWAITING_PAYMENT_RECEIPT' && user.pendingPurchase) {
         const photo = ctx.message.photo.pop();
         const pack = user.pendingPurchase;
-        
+
         await db.createPayment(
           userId,
           user.teamId,
@@ -2270,12 +2268,12 @@ function setupBotHandlers(bot) {
         const teamName = user.tempTeamName || "Mening Jamoam";
         const channelLink = ctx.message.text;
         const team = await db.createTeam(userId, teamName, channelLink);
-        
+
         await db.updateUser(userId, { state: 'IDLE', tempTeamName: null });
         const successText = (loc.team_created_success || "Jamoa muvaffaqiyatli yaratildi va tasdiqlash uchun yuborildi!\n\nID Kod: `{team_id}`\nNomi: **{team_name}**\n\nIltimos kuting, admin ruxsat berishi bilanoq sizga xabar beramiz.")
           .replace('{team_id}', team.id)
           .replace('{team_name}', teamName);
-        
+
         await ctx.reply(successText);
         await sendTeamMenu(ctx, user);
       } else if (user.state === 'ENTER_JOIN_CODE') {
@@ -2313,7 +2311,7 @@ function setupBotHandlers(bot) {
       } else if (user.state === 'ENTER_EPISODE_NUMBER') {
         if (!user.currentSession) return;
         user.currentSession.episodeNumber = ctx.message.text;
-        
+
         // Handle direct continuity if they are adding subsequent episodes
         if (user.currentSession.fileContent === '') {
           // Instruct them to provide file now that the episode has been labeled
@@ -2373,7 +2371,7 @@ async function runTranslation(ctx, user) {
   const loc = getLocaleByCtx(ctx);
   const userId = ctx.from.id;
   const session = user.currentSession;
-  
+
   const isCallback = !!ctx.callbackQuery;
   let statusMsg = null;
   let progressMessageId = null;
@@ -2421,7 +2419,7 @@ async function runTranslation(ctx, user) {
         } else {
           await ctx.reply(alertQueueMsg);
         }
-      } catch (e) {}
+      } catch (e) { }
       hasShownQueueAlert = true;
     }
 
@@ -2455,7 +2453,7 @@ async function runTranslation(ctx, user) {
 
   try {
     logEvent('INFO', `Starting job for user @${ctx.from.username || userId}. File: ${session.fileName}`);
-    
+
     if (isCallback) {
       statusMsg = await ctx.reply(loc.processing);
       progressMessageId = statusMsg.message_id;
@@ -2463,7 +2461,7 @@ async function runTranslation(ctx, user) {
       statusMsg = await ctx.reply(loc.processing);
       progressMessageId = statusMsg.message_id;
     }
-    
+
     // Fetch global systemPrompt from DB settings
     const settings = await db.getSettings();
     const systemPrompt = settings.systemPrompt;
@@ -2486,7 +2484,7 @@ async function runTranslation(ctx, user) {
           .replace('{translated}', translated)
           .replace('{eta}', eta)
           .replace('{progressBar}', progressBar);
-        
+
         const progressPercent = Math.round((translated / total) * 100);
         const existingIndex = activeJobs.findIndex(j => j.userId === userId.toString());
         const jobInfo = {
@@ -2503,11 +2501,11 @@ async function runTranslation(ctx, user) {
         } else {
           activeJobs.push(jobInfo);
         }
-        
+
         logEvent('GEMINI', `Progress update for ${session.fileName}: ${progressPercent}% done.`);
         try {
           await ctx.telegram.editMessageText(ctx.chat.id, progressMessageId, null, text);
-        } catch (e) {}
+        } catch (e) { }
       }
     });
 
@@ -2551,7 +2549,7 @@ async function runTranslation(ctx, user) {
             ]
           ])
         );
-      } catch (rateErr) {}
+      } catch (rateErr) { }
     }, 800);
 
     // Send continuity additions message if it is a multi-episode project
@@ -2563,14 +2561,14 @@ async function runTranslation(ctx, user) {
             [Markup.button.callback(loc.btn_next_episode || "🎬 Keyingi qismni tarjima qilish", `add_next_episode_${currentProject.id}`)],
             [Markup.button.callback(loc.btn_back_projects || "📁 Loyihalar bo'limi", 'btn_back_projects')]
           ]));
-        } catch (kdErr) {}
+        } catch (kdErr) { }
       }, 1500);
     }
   } catch (err) {
     activeJobs = activeJobs.filter(j => j.userId !== userId.toString());
     logEvent('ERROR', `Translation failed for user @${ctx.from.username || userId}: ${err.message}`);
     await db.updateUser(userId, { state: 'IDLE', currentSession: null });
-    
+
     // Safe refund calculation rule: return unused line portion of original payment token balance
     const unusedLimit = requiredTokens - translatedCount;
     if (unusedLimit > 0) {
@@ -2581,7 +2579,7 @@ async function runTranslation(ctx, user) {
         logEvent('REFUND', `Refunded ${unusedLimit} tokens to team ${liveTeam.name} due to translation interruption`);
         try {
           await ctx.reply(`Nosozlik tufayli tarjima to'xtadi. Sarflanmagan **${unusedLimit}** ta token jamoaviy balansingizga qaytarildi!`);
-        } catch (refundErr) {}
+        } catch (refundErr) { }
       }
     }
 
@@ -2606,7 +2604,7 @@ let isWorkerRunning = false;
 async function runAutomatedAnimeWorker() {
   if (isWorkerRunning) return;
   isWorkerRunning = true;
-  
+
   try {
     const settings = await db.getSettings();
     if (settings.auto_download_enabled) {
@@ -2617,12 +2615,12 @@ async function runAutomatedAnimeWorker() {
           const resJson = await response.json();
           const schedule = resJson.schedule || [];
           const botUsername = activeBotInstance ? activeBotInstance.botInfo?.username : 'sub_trans_bot';
-          
+
           for (const item of schedule) {
             if (item.aired) {
               const animeTitle = item.title;
               const episodeNum = item.time.split(':')[0] || '01';
-              
+
               const exists = db.data.automatedAnimes.some(a => a.title === animeTitle && a.episode === episodeNum);
               if (!exists) {
                 const formatFileName = (prefix, name, ep) => {
@@ -2634,11 +2632,11 @@ async function runAutomatedAnimeWorker() {
                   const truncatedTitle = name.length > maxLen ? name.substring(0, maxLen - 2) + '..' : name;
                   return `${botPrefix} ${truncatedTitle}${epSuffix}`;
                 };
-                
+
                 const baseName = formatFileName(botUsername, animeTitle, episodeNum);
                 const mkvName = `${baseName}.mkv`;
                 const subName = `${baseName}.ass`;
-                
+
                 const newEntry = {
                   id: "auto_" + Date.now().toString(36) + "_" + Math.random().toString(36).substring(3, 8),
                   title: animeTitle,
@@ -2657,14 +2655,14 @@ async function runAutomatedAnimeWorker() {
                   tracks: ["English (ASS)", "Japanese (ASS)"],
                   visible: true
                 };
-                
+
                 db.data.automatedAnimes.unshift(newEntry);
                 logEvent('INFO', `[SubsPlease] New airing anime detected: ${animeTitle} - Ep ${episodeNum}`);
               }
             }
           }
-          
-          db.data.automatedAnimes.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+          db.data.automatedAnimes.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
           db.data.automatedAnimes.forEach((item, index) => {
             item.visible = (index < 25);
           });
@@ -2674,11 +2672,11 @@ async function runAutomatedAnimeWorker() {
         logEvent('ERROR', `[SubsPlease Fetch Error] ${err.message}`);
       }
     }
-    
+
     const pendingItem = db.data.automatedAnimes.find(a => a.status === 'PENDING');
     if (pendingItem) {
       logEvent('INFO', `[Queue Worker] Commenced automated pipeline for: ${pendingItem.title} - ${pendingItem.episode}`);
-      
+
       pendingItem.status = 'DOWNLOADING';
       for (let p = 0; p <= 100; p += 25) {
         pendingItem.progress = p;
@@ -2686,18 +2684,18 @@ async function runAutomatedAnimeWorker() {
         await db.save();
         await new Promise(r => setTimeout(r, 1500));
       }
-      
+
       pendingItem.status = 'EXTRACTING';
       pendingItem.progress = 100;
       pendingItem.eta = "Subtitrlar chiqarib olinmoqda...";
       await db.save();
       await new Promise(r => setTimeout(r, 1500));
-      
+
       pendingItem.status = 'TRANSLATING';
       pendingItem.progress = 0;
       pendingItem.eta = "Gemini tarjima boshlandi...";
       await db.save();
-      
+
       const totalParts = 125;
       for (let l = 10; l <= totalParts; l += 30) {
         pendingItem.progress = Math.min(Math.round((l / totalParts) * 100), 100);
@@ -2705,13 +2703,13 @@ async function runAutomatedAnimeWorker() {
         await db.save();
         await new Promise(r => setTimeout(r, 1500));
       }
-      
+
       pendingItem.status = 'COMPLETED';
       pendingItem.progress = 100;
       pendingItem.eta = 'Bajarildi';
-      
+
       const mockAssContent = `[Script Info]\nTitle: Translated Subtitle\n\n[Events]\nDialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,Assalomu alaykum, bugun yangi qism chiqdi!\nDialogue: 0,0:00:05.10,0:00:10.00,Default,,0,0,0,,Umid qilamanki, sizlarga tarjimamiz yoqadi.`;
-      
+
       const uploadRes = await uploadFileToChannel(pendingItem.subName, mockAssContent, 'subtitle');
       if (uploadRes.fileId) {
         pendingItem.subFileId = uploadRes.fileId;
@@ -2720,7 +2718,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.subFileId = "simulated_sub_file_id";
         pendingItem.subLink = "https://t.me/c/1234567890/55";
       }
-      
+
       const mockMkvContent = "[MKV Video Container File Stream Placeholder]";
       const uploadMkvRes = await uploadFileToChannel(pendingItem.mkvName, mockMkvContent, 'mkv');
       if (uploadMkvRes.fileId) {
@@ -2730,7 +2728,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.mkvFileId = "simulated_mkv_file_id";
         pendingItem.mkvLink = "https://t.me/c/1234567890/56";
       }
-      
+
       await db.save();
       logEvent('SUCCESS', `[Queue Worker] Finished automated pipeline for: ${pendingItem.title} - ${pendingItem.episode}`);
     }
@@ -2757,15 +2755,15 @@ async function uploadFileToChannel(filename, content, type) {
       logEvent('INFO', 'GramJS orqali KATTA HAJMLI (2GB gacha) fayl yuklanmoqda: ' + filename);
       const userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
       if (userClient) {
-         const msg = await userClient.sendFile(channelId, {
-             file: tmpPath,
-             caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename,
-             forceDocument: true
-         });
-         fileId = msg.id;
-         link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.id;
-         await userClient.disconnect();
-         return { fileId, link };
+        const msg = await userClient.sendFile(channelId, {
+          file: tmpPath,
+          caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename,
+          forceDocument: true
+        });
+        fileId = msg.id;
+        link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.id;
+        await userClient.disconnect();
+        return { fileId, link };
       }
     } catch (e) {
       console.error('GramJS upload error:', e.message);
