@@ -192,6 +192,34 @@ async function runBackupProcedure() {
 runBackupProcedure();
 setInterval(runBackupProcedure, 4 * 60 * 60 * 1000);
 
+// Automated 24h Cloud Backup Task for db.json to Telegram Storage Channel
+async function runCloudBackupProcedure() {
+  try {
+    const s = await db.getSettings();
+    const channelId = s.storage_channel_id;
+    if (!channelId || !activeBotInstance) return;
+
+    let dbContent;
+    try {
+      dbContent = await fs.readFile('db.json', 'utf-8');
+    } catch (e) { return; }
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const backupName = `SubTrans_DB_Backup_${todayStr}.json`;
+
+    await activeBotInstance.telegram.sendDocument(channelId, {
+      source: Buffer.from(dbContent, 'utf-8'),
+      filename: backupName
+    }, {
+      caption: `📦 #BACKUP | Avtomatik Kunlik Bulutli Zaxira\nSana: ${new Date().toLocaleString('uz-UZ')}\n\nFoydalanuvchilar, jamoalar, paketlar va barcha ma'lumotlar ushbu faylda saqlanmoqda. Buni panel orqali "Upload" qilib istalgan vaqtda qayta tiklashingiz mumkin.`
+    });
+    logEvent('INFO', `Daily cloud DB backup successfully sent to ${channelId}`);
+  } catch (err) {
+    console.error('[CLOUD BACKUP ERROR]', err.message);
+  }
+}
+setInterval(runCloudBackupProcedure, 24 * 60 * 60 * 1000);
+
 const app = express();
 app.use(express.json());
 
@@ -530,6 +558,50 @@ app.post('/api/config', async (req, res) => {
   }
 });
 
+// Advanced Configuration Export/Import Endpoints
+app.get('/api/admin/export-config', async (req, res) => {
+  try {
+    const settings = await db.getSettings();
+    const exportData = {
+      env: {
+        BOT_TOKEN: process.env.BOT_TOKEN,
+        GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+        DEFAULT_BATCH_SIZE: process.env.DEFAULT_BATCH_SIZE,
+        TELEGRAM_API_ID: process.env.TELEGRAM_API_ID,
+        TELEGRAM_API_HASH: process.env.TELEGRAM_API_HASH
+      },
+      settings: settings
+    };
+    res.json(exportData);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/import-config', async (req, res) => {
+  try {
+    const { env, settings } = req.body;
+    if (env) {
+      process.env.BOT_TOKEN = env.BOT_TOKEN || process.env.BOT_TOKEN || '';
+      process.env.GEMINI_API_KEY = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
+      process.env.DEFAULT_BATCH_SIZE = env.DEFAULT_BATCH_SIZE || process.env.DEFAULT_BATCH_SIZE || '45';
+      process.env.TELEGRAM_API_ID = env.TELEGRAM_API_ID || process.env.TELEGRAM_API_ID || '';
+      process.env.TELEGRAM_API_HASH = env.TELEGRAM_API_HASH || process.env.TELEGRAM_API_HASH || '';
+      const envContent = `BOT_TOKEN=${process.env.BOT_TOKEN}\nGEMINI_API_KEY=${process.env.GEMINI_API_KEY}\nDEFAULT_BATCH_SIZE=${process.env.DEFAULT_BATCH_SIZE}\nPORT=3000\nTELEGRAM_API_ID=${process.env.TELEGRAM_API_ID || ''}\nTELEGRAM_API_HASH=${process.env.TELEGRAM_API_HASH || ''}\n`;
+      await fs.writeFile('.env', envContent, 'utf-8');
+    }
+    if (settings) {
+      await db.updateSettings(settings);
+    }
+    resetAi();
+    logEvent('SUCCESS', 'Tizim sozlamalari tashqi fayldan muvaffaqiyatli tiklandi va o\'rnatildi.');
+    await restartBot(process.env.BOT_TOKEN);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Simulation endpoints removed for 100% production active mode
 
 let cachedHealthData = null;
@@ -644,6 +716,29 @@ app.post('/api/admin/backups/restore', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     logEvent('ERROR', `Zaxiradan qayta tiklashda xatolik: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/backups/upload', async (req, res) => {
+  try {
+    const { dbContent } = req.body;
+    if (!dbContent) {
+      return res.status(400).json({ error: 'DB content is required' });
+    }
+    JSON.parse(dbContent); // Data schema validation
+
+    try {
+      const current_db = await fs.readFile('db.json', 'utf-8');
+      await fs.writeFile('backups/pre_upload_backup.json', current_db, 'utf-8');
+    } catch (e) { }
+
+    await fs.writeFile('db.json', dbContent, 'utf-8');
+    await db.init();
+    resetAi();
+    logEvent('SUCCESS', 'Zaxira ma\'lumotlar bazasi tashqi JSON fayldan muvaffaqiyatli tiklandi.');
+    res.json({ success: true });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -1093,7 +1188,7 @@ function setupBotHandlers(bot) {
       if (result.success) {
         const promo = result.promo;
         let text = "✅ Promokod muvaffaqiyatli ishlatildi!\n\n";
-        if (promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
+        if (promo.type === 'package' || promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
           text += 'Sizning jamoangiz obunasi faollashtirildi.';
         } else {
           text += 'Jamoangiz hisobiga ' + promo.value + " token qo'shildi.";
@@ -1881,17 +1976,51 @@ function setupBotHandlers(bot) {
       const loc = getLocaleByCtx(ctx);
       const settings = await db.getSettings();
 
-      const balanceText = (loc.balance_info || "Hozirgi Balans: **{tokens}** Token.\n\nHar 1 qator subtitr tarjimasi uchun 1 token ishlatiladi. Agar tarjima paytida tizimda uzilish bo'lsa, qolgan tokenlaringiz avtomatik tarzda qaytariladi.\n\nTo'lov qilish uchun quyidagi paketlardan birini tanlang:")
-        .replace('{tokens}', team.tokens);
+      const balanceText = `Hozirgi Balans: **${team.tokens}** Token.\n\nHar 1 qator subtitr tarjimasi uchun 1 token ishlatiladi. Agar tarjima paytida tizimda uzilish bo'lsa, qolgan tokenlaringiz avtomatik tarzda qaytariladi.\n\nXarid turini tanlang:`;
 
-      const buttons = [];
-      const packages = settings.packages || [];
-      for (const pack of packages) {
-        buttons.push([Markup.button.callback(`${pack.name} - ${pack.price}`, `buy_${pack.id}`)]);
-      }
-      buttons.push([Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]);
+      const buttons = [
+        [Markup.button.callback("🪙 Token xarid qilish", 'category_tokens')],
+        [Markup.button.callback("📦 Obuna paketlari", 'category_packages')],
+        [Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]
+      ];
 
       await ctx.editMessageText(balanceText, Markup.inlineKeyboard(buttons));
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  bot.action('category_tokens', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const settings = await db.getSettings();
+
+      const tokenPacks = (settings.packages || []).filter(p => p.type === 'tokens');
+      const buttons = [];
+      for (const pack of tokenPacks) {
+        buttons.push([Markup.button.callback(`${pack.name} - ${pack.price}`, `buy_${pack.id}`)]);
+      }
+      buttons.push([Markup.button.callback("⬅️ Orqaga", 'action_team_balance')]);
+
+      await ctx.editMessageText("🪙 **Token Paketlari**\n\nHisobingizni to'ldirish uchun kerakli token miqdorini tanlang:", Markup.inlineKeyboard(buttons));
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  bot.action('category_packages', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const settings = await db.getSettings();
+
+      const subPacks = (settings.packages || []).filter(p => p.type !== 'tokens');
+      const buttons = [];
+      for (const pack of subPacks) {
+        buttons.push([Markup.button.callback(`${pack.name} - ${pack.price}`, `buy_${pack.id}`)]);
+      }
+      buttons.push([Markup.button.callback("⬅️ Orqaga", 'action_team_balance')]);
+
+      await ctx.editMessageText("📦 **Obuna Paketlari**\n\nJamoangiz uchun mos obuna tarifini tanlang (Yangi qismlarni avtomatik ochish uchun):", Markup.inlineKeyboard(buttons));
     } catch (e) {
       console.error(e);
     }
@@ -2220,7 +2349,7 @@ function setupBotHandlers(bot) {
         if (result.success) {
           const promo = result.promo;
           let text = "✅ Promokod muvaffaqiyatli ishlatildi!\n\n";
-          if (promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
+          if (promo.type === 'package' || promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
             text += 'Sizning jamoangiz obunasi faollashtirildi.';
           } else {
             text += 'Jamoangiz hisobiga ' + promo.value + " token qo'shildi.";
@@ -2235,7 +2364,7 @@ function setupBotHandlers(bot) {
         return;
       }
 
-      if (ctx.message.photo && user.state === 'AWAITING_PAYMENT_RECEIPT' && user.pendingPurchase) {
+      if (ctx.message.photo && user.state === 'UPLOAD_SCREENSHOT' && user.pendingPurchase) {
         const photo = ctx.message.photo.pop();
         const pack = user.pendingPurchase;
 
@@ -2247,7 +2376,8 @@ function setupBotHandlers(bot) {
           pack.type,
           pack.value,
           pack.name,
-          pack.days
+          pack.days,
+          pack.id
         );
 
         await db.updateUser(userId, { state: 'IDLE', pendingPurchase: null });

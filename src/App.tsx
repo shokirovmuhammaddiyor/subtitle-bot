@@ -317,6 +317,78 @@ export default function App() {
     }
   };
 
+  const handleUploadBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!window.confirm("Haqiqatan ham ma'lumotlar bazasini ushbu fayl bilan almashtirmoqchimisiz?")) return;
+    setBackupsLoading(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        JSON.parse(text); // validation
+        const res = await fetch('/api/admin/backups/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dbContent: text })
+        });
+        if (res.ok) {
+          setBackupsSuccess("Ma'lumotlar bazasi fayldan muvaffaqiyatli tiklandi!");
+          fetchBackups();
+          fetchStats();
+          fetchTeams();
+          fetchUsers();
+        } else {
+          const d = await res.json();
+          setBackupsError(d.error || "Xatolik yuz berdi");
+        }
+      } catch (err) { setBackupsError("Yaroqsiz JSON fayl"); }
+      finally { setBackupsLoading(false); }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleExportConfig = async () => {
+    try {
+      const res = await fetch('/api/admin/export-config');
+      const data = await res.json();
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
+      const dl = document.createElement('a');
+      dl.setAttribute("href", dataStr);
+      dl.setAttribute("download", `subtrans_config_backup_${new Date().toISOString().slice(0, 10)}.json`);
+      document.body.appendChild(dl);
+      dl.click();
+      dl.remove();
+    } catch (e) { alert("Export qilishda xato"); }
+  };
+
+  const handleImportConfig = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!window.confirm("Barcha API kalitlari va sozlamalar ushbu fayldagiga o'zgartiriladi. Davom etamizmi?")) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+        const res = await fetch('/api/admin/import-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(parsed)
+        });
+        if (res.ok) {
+          alert("Tizim sozlamalari muvaffaqiyatli tiklandi!");
+          fetchConfig();
+        } else {
+          alert("Yuklashda xatolik yuz berdi");
+        }
+      } catch (err) { alert("Faylni o'qishda xatolik yuz berdi"); }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   const handleBlockUser = async (userId: number, isBlocked: boolean) => {
     try {
       const endpoint = isBlocked ? 'unblock' : 'block';
@@ -698,7 +770,7 @@ export default function App() {
       alert("Iltimos, nom va narx kiriting!");
       return;
     }
-    const id = newPackType.startsWith('monthly_') ? `${newPackType}_${Date.now()}` : `pack_${Date.now()}`;
+    const id = newPackType === 'package' ? `pkg_${Date.now()}` : `pack_${Date.now()}`;
     const newPack = {
       id,
       name: newPackName.trim(),
@@ -1209,10 +1281,10 @@ export default function App() {
                     <p className="text-[10px] font-mono text-emerald-400 mt-0.5">Faollik: {sess.lastActive}</p>
                     <p className="mt-1">
                       <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${sess.status === 'Faol'
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                          : sess.status === 'Chiqilgan'
-                            ? 'bg-slate-500/10 text-slate-500 border border-slate-500/20'
-                            : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : sess.status === 'Chiqilgan'
+                          ? 'bg-slate-500/10 text-slate-500 border border-slate-500/20'
+                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                         }`}>
                         {sess.status}
                       </span>
@@ -1345,8 +1417,8 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('config')}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'config'
-                        ? 'bg-sky-500 text-slate-950 font-bold'
-                        : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
+                      ? 'bg-sky-500 text-slate-950 font-bold'
+                      : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
                       }`}
                   >
                     <Server className="w-3 h-3" /> Settings
@@ -1354,8 +1426,8 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('teams')}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'teams'
-                        ? 'bg-sky-500 text-slate-950 font-bold'
-                        : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
+                      ? 'bg-sky-500 text-slate-950 font-bold'
+                      : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
                       }`}
                   >
                     <Users className="w-3 h-3" /> Teams ({teams.length})
@@ -1363,8 +1435,8 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('payments')}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'payments'
-                        ? 'bg-sky-500 text-slate-950 font-bold'
-                        : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
+                      ? 'bg-sky-500 text-slate-950 font-bold'
+                      : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
                       }`}
                   >
                     <CreditCard className="w-3 h-3" /> Receipts ({payments.length})
@@ -1372,8 +1444,8 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('yaml')}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'yaml'
-                        ? 'bg-sky-500 text-slate-950 font-bold'
-                        : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
+                      ? 'bg-sky-500 text-slate-950 font-bold'
+                      : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
                       }`}
                   >
                     <Globe className="w-3 h-3" /> Localization
@@ -1381,8 +1453,8 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('stats')}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'stats'
-                        ? 'bg-sky-500 text-slate-950 font-bold'
-                        : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
+                      ? 'bg-sky-500 text-slate-950 font-bold'
+                      : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
                       }`}
                   >
                     <Activity className="w-3 h-3" /> Stats & Ratings
@@ -1390,8 +1462,8 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('admin_users')}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'admin_users'
-                        ? 'bg-rose-500 text-slate-950 font-bold'
-                        : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
+                      ? 'bg-rose-500 text-slate-950 font-bold'
+                      : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
                       }`}
                   >
                     <ShieldAlert className="w-3 h-3" /> Admin Users
@@ -1399,8 +1471,8 @@ export default function App() {
                   <button
                     onClick={() => setActiveTab('backups')}
                     className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'backups'
-                        ? 'bg-sky-500 text-slate-950 font-bold'
-                        : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
+                      ? 'bg-sky-500 text-slate-950 font-bold'
+                      : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
                       }`}
                   >
                     <DbIcon className="w-3 h-3" /> Backups
@@ -1848,9 +1920,8 @@ export default function App() {
                                   <div className="text-[10px] text-slate-400 font-mono mt-1 space-y-1">
                                     <div>Turi: <span className="text-emerald-400 font-bold">{
                                       pack.type === 'tokens' ? 'Token (Qo\'lda tarjima)' :
-                                        pack.type === 'monthly_starter' ? 'Starter (So\'nggi 10)' :
-                                          pack.type === 'monthly_fandub' ? 'FanDub (So\'nggi 25)' :
-                                            pack.type === 'monthly_studio' ? 'Studio (So\'nggi 50)' : pack.type
+                                        pack.type === 'package' ? 'Obuna Paketi' :
+                                          pack.type.startsWith('monthly_') ? 'Obuna (Legacy)' : pack.type
                                     }</span></div>
                                     <div>Qiymati: <span className="text-sky-400">{pack.value?.toLocaleString()} {pack.type === 'tokens' ? 'token' : 'subtitle'}</span></div>
                                     <div className="text-xs text-white font-bold mt-1.5 pt-1.5 border-t border-slate-900">Narxi: <span className="text-amber-400">{pack.price}</span></div>
@@ -1883,17 +1954,10 @@ export default function App() {
                             <select
                               className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               value={newPackType}
-                              onChange={(e) => {
-                                setNewPackType(e.target.value);
-                                if (e.target.value === 'monthly_starter') setNewPackValue('10');
-                                else if (e.target.value === 'monthly_fandub') setNewPackValue('25');
-                                else if (e.target.value === 'monthly_studio') setNewPackValue('50');
-                              }}
+                              onChange={(e) => setNewPackType(e.target.value)}
                             >
                               <option value="tokens">Tokenlar (Qo'lda tarjima qilish)</option>
-                              <option value="monthly_starter">Boshlang'ich (So'nggi 10 anime)</option>
-                              <option value="monthly_fandub">FanDub (So'nggi 25 anime)</option>
-                              <option value="monthly_studio">Studio (So'nggi 50 anime)</option>
+                              <option value="package">Obuna Paketi (Kun/Oy)</option>
                             </select>
                           </div>
 
@@ -1947,6 +2011,19 @@ export default function App() {
                         >
                           Karta va Tariflarni Saqlash
                         </button>
+                      </div>
+
+                      <div className="pt-2 mt-2 flex flex-wrap gap-2 rounded">
+                        <button
+                          onClick={handleExportConfig}
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-4 py-2 rounded flex items-center gap-1.5 transition-colors border border-slate-700"
+                        >
+                          <Download className="w-3.5 h-3.5" /> Barcha Sozlamalarni Eksport Qilish (.json)
+                        </button>
+                        <label className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold px-4 py-2 rounded flex items-center gap-1.5 cursor-pointer transition-colors border border-slate-700">
+                          <Upload className="w-3.5 h-3.5" /> Sozlamalarni Import Qilish
+                          <input type="file" accept=".json" onChange={handleImportConfig} className="hidden" />
+                        </label>
                       </div>
                     </div>
 
@@ -2018,9 +2095,7 @@ export default function App() {
                               onChange={(e) => setNewPromoType(e.target.value)}
                             >
                               <option value="tokens">Tokenlar</option>
-                              <option value="monthly_starter">Starter (Obuna)</option>
-                              <option value="monthly_fandub">FanDub (Obuna)</option>
-                              <option value="monthly_studio">Studio (Obuna)</option>
+                              <option value="package">Paket/Obuna</option>
                             </select>
                           </div>
                           <div>
@@ -2091,9 +2166,9 @@ export default function App() {
                                   <div className="text-[9px] text-slate-500">Epizod: {item.episode} | Yaratildi: {new Date(item.createdAt).toLocaleTimeString()}</div>
                                 </div>
                                 <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${item.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                    item.status === 'TRANSLATING' ? 'bg-sky-500/10 text-sky-400 border border-sky-505/20 animate-pulse' :
-                                      item.status === 'DOWNLOADING' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                                        'bg-slate-850 text-slate-400 border border-slate-800'
+                                  item.status === 'TRANSLATING' ? 'bg-sky-500/10 text-sky-400 border border-sky-505/20 animate-pulse' :
+                                    item.status === 'DOWNLOADING' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                                      'bg-slate-850 text-slate-400 border border-slate-800'
                                   }`}>
                                   {item.status} ({item.progress}%)
                                 </span>
@@ -2153,8 +2228,8 @@ export default function App() {
                                 <h4 className="text-xs font-bold text-white flex items-center gap-2">
                                   {team.name}
                                   <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${team.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                      team.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
-                                        'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                    team.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
+                                      'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                                     }`}>
                                     {team.status}
                                   </span>
@@ -2294,8 +2369,8 @@ export default function App() {
                               <div className="flex items-center gap-2">
                                 <span className="text-xs font-bold text-white capitalize">{p.packName}</span>
                                 <span className={`px-2 py-0.2 rounded text-[8px] font-bold ${p.status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                    p.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
-                                      'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                  p.status === 'PENDING' ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' :
+                                    'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                                   }`}>
                                   {p.status}
                                 </span>
@@ -2309,18 +2384,18 @@ export default function App() {
                             </div>
 
                             {/* Show Image preview block */}
-                            {p.screenshotFileId && (
+                            {p.screenshot && (
                               <div className="flex flex-col items-center shrink-0 w-24 gap-1.5">
                                 <div className="text-[9px] font-mono text-slate-500 uppercase">Payment Receipt</div>
                                 <div className="w-20 h-24 bg-slate-950 border border-slate-800 rounded overflow-hidden relative group">
                                   <img
                                     className="w-full h-full object-cover"
-                                    src={`/api/telegram-file/${p.screenshotFileId}`}
+                                    src={`/api/telegram-file/${p.screenshot}`}
                                     alt="Chek"
                                     referrerPolicy="no-referrer"
                                   />
                                   <button
-                                    onClick={() => setPreviewImage(`/api/telegram-file/${p.screenshotFileId}`)}
+                                    onClick={() => setPreviewImage(`/api/telegram-file/${p.screenshot}`)}
                                     className="absolute inset-0 bg-slate-950/80 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all rounded text-sky-400 text-xs"
                                   >
                                     <Eye className="w-4 h-4" /> Check
@@ -2401,8 +2476,8 @@ export default function App() {
                             key={loc.name}
                             onClick={() => setSelectedLang(loc.lang)}
                             className={`p-2.5 rounded-lg border flex flex-col justify-between cursor-pointer transition-all ${selectedLang === loc.lang
-                                ? 'bg-sky-500/10 border-sky-500/40 text-sky-400 font-bold'
-                                : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:border-slate-700'
+                              ? 'bg-sky-500/10 border-sky-500/40 text-sky-400 font-bold'
+                              : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:border-slate-700'
                               }`}
                           >
                             <div className="flex items-center justify-between">
@@ -2750,8 +2825,8 @@ export default function App() {
                                   <button
                                     onClick={() => handleBlockUser(item.id, item.isBlocked)}
                                     className={`py-1 px-2.5 flex-1 rounded text-[10px] font-bold select-none cursor-pointer duration-150 ${item.isBlocked
-                                        ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/15'
-                                        : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/15'
+                                      ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/15'
+                                      : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/15'
                                       }`}
                                   >
                                     {item.isBlocked ? "Blokdan Ochish" : "Bloklash"}
@@ -2886,10 +2961,10 @@ export default function App() {
                                   <td className="py-2.5 text-emerald-400 font-semibold">{sess.lastActive}</td>
                                   <td className="py-2.5 text-right font-sans">
                                     <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${sess.status === 'Faol'
-                                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                        : sess.status === 'Chiqilgan'
-                                          ? 'bg-slate-500/10 text-slate-500 border border-slate-500/20'
-                                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                      : sess.status === 'Chiqilgan'
+                                        ? 'bg-slate-500/10 text-slate-500 border border-slate-500/20'
+                                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                                       }`}>
                                       {sess.status}
                                     </span>
@@ -2925,7 +3000,7 @@ export default function App() {
                         Tizim doimiy barqarorlikni ta'minlash maqsadida <strong className="text-amber-400 font-sans font-semibold">har 24 soatda avtomatik ravishda</strong> zaxira nusxalarini yaratadi va faqat oxirgi 7 kunlik ma'lumotlarni saqlaydi. Tizim holatini istalgan zaxira nusxasiga qaytarishingiz mumkin. To'liq tiklanishdan avval joriy holat avtomatik ravishda zaxiralanadi!
                       </p>
 
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 flex-wrap mt-2">
                         <button
                           onClick={handleCreateBackup}
                           className="bg-sky-500 hover:bg-sky-600 text-slate-950 font-bold text-[11px] px-3.5 py-1.5 rounded flex items-center gap-1.5 cursor-pointer transition-colors"
@@ -2934,6 +3009,12 @@ export default function App() {
                           <Save className="w-3.5 h-3.5 text-slate-950" />
                           Hozir Zaxira Yaratish (Manual Backup)
                         </button>
+
+                        <label className="bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold text-[11px] px-3.5 py-1.5 rounded flex items-center gap-1.5 cursor-pointer transition-colors">
+                          <Upload className="w-3.5 h-3.5" />
+                          DB Zaxirani Fayldan Tiklash (.json)
+                          <input type="file" accept=".json" onChange={handleUploadBackup} className="hidden" />
+                        </label>
                       </div>
                     </div>
 
@@ -3084,9 +3165,9 @@ export default function App() {
                   <div key={idx} className="flex gap-4">
                     <span className="text-slate-600 text-right w-16 select-none shrink-0">{log.time}</span>
                     <span className={`font-bold shrink-0 ${log.type === 'GEMINI' ? 'text-sky-400' :
-                        log.type === 'SUCCESS' ? 'text-emerald-400' :
-                          log.type === 'ERROR' ? 'text-rose-400' :
-                            log.type === 'DB' ? 'text-yellow-400' : 'text-slate-500'
+                      log.type === 'SUCCESS' ? 'text-emerald-400' :
+                        log.type === 'ERROR' ? 'text-rose-400' :
+                          log.type === 'DB' ? 'text-yellow-400' : 'text-slate-500'
                       }`}>
                       [{log.type}]
                     </span>

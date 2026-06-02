@@ -3,12 +3,12 @@ import fs from 'fs/promises';
 export class Database {
   constructor(filePath = 'db.json') {
     this.filePath = filePath;
-    this.data = { 
-      users: [], 
-      projects: [], 
-      episodes: [], 
-      teams: [], 
-      payments: [], 
+    this.data = {
+      users: [],
+      projects: [],
+      episodes: [],
+      teams: [],
+      payments: [],
       ratings: [],
       settings: null,
       automatedAnimes: []
@@ -19,7 +19,7 @@ export class Database {
     try {
       const content = await fs.readFile(this.filePath, 'utf-8');
       const parsed = JSON.parse(content);
-      
+
       this.data = {
         users: parsed.users || [],
         projects: parsed.projects || [],
@@ -28,8 +28,7 @@ export class Database {
         payments: parsed.payments || [],
         ratings: parsed.ratings || [],
         settings: parsed.settings || null,
-        automatedAnimes: parsed.automatedAnimes || [],
-        promocodes: parsed.promocodes || []
+        automatedAnimes: parsed.automatedAnimes || []
       };
 
       if (!this.data.settings) {
@@ -233,7 +232,7 @@ Quyidagi qoidalarga qat'iy amal qil:
   async createTeam(ownerId, name, channelLink) {
     const code = this.generateTeamCode();
     const numericOwnerId = Number(ownerId);
-    
+
     const team = {
       id: code,
       name,
@@ -245,9 +244,9 @@ Quyidagi qoidalarga qat'iy amal qil:
       maxConcurrentJobs: 1,
       createdAt: new Date().toISOString()
     };
-    
+
     this.data.teams.push(team);
-    
+
     // Update owner's user state & linkage
     await this.updateUser(numericOwnerId, { teamId: code });
     await this.save();
@@ -294,80 +293,12 @@ Quyidagi qoidalarga qat'iy amal qil:
     return team;
   }
 
-  
-  // --- Promocodes functionality ---
-  async getPromocodes() {
-    return this.data.promocodes || [];
-  }
-
-  async createPromocode(code, type, value, days, maxUses) {
-    if (!this.data.promocodes) this.data.promocodes = [];
-    const promo = {
-      id: Date.now().toString(),
-      code: code.trim().toUpperCase(),
-      type,
-      value: Number(value),
-      days: days ? Number(days) : null,
-      maxUses: Number(maxUses) || 0,
-      usedBy: [],
-      createdAt: new Date().toISOString()
-    };
-    this.data.promocodes.push(promo);
-    await this.save();
-    return promo;
-  }
-
-  async deletePromocode(id) {
-    if (!this.data.promocodes) return;
-    this.data.promocodes = this.data.promocodes.filter(p => p.id !== id);
-    await this.save();
-  }
-
-  async usePromocode(code, teamId) {
-    if (!this.data.promocodes) return { success: false, error: 'Bunday promokod mavjud emas' };
-    const promo = this.data.promocodes.find(p => p.code === code.trim().toUpperCase());
-    if (!promo) return { success: false, error: 'Bunday promokod mavjud emas' };
-    
-    if (promo.usedBy.includes(teamId)) return { success: false, error: 'Siz ushbu promokoddan avval foydalangansiz' };
-    if (promo.maxUses > 0 && promo.usedBy.length >= promo.maxUses) return { success: false, error: 'Ushbu promokodning ishlatish limiti tugagan' };
-
-    const team = await this.getTeam(teamId);
-    if (!team) return { success: false, error: 'Jamoangiz topilmadi' };
-
-    promo.usedBy.push(teamId);
-    
-    if (promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
-       team.activeSubscription = promo.type;
-       let expirationDays = promo.days || 30;
-       if (promo.days === 0) {
-         team.subscriptionExpiresAt = new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString();
-       } else {
-         team.subscriptionExpiresAt = new Date(Date.now() + expirationDays * 24 * 3600 * 1000).toISOString();
-       }
-       team.maxConcurrentJobs = 3;
-    } else {
-       team.tokens = (team.tokens || 0) + Number(promo.value);
-       if (promo.days !== null && promo.days !== undefined) {
-         if (promo.days === 0) {
-           team.subscriptionExpiresAt = new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString();
-         } else {
-           team.subscriptionExpiresAt = new Date(Date.now() + promo.days * 24 * 3600 * 1000).toISOString();
-         }
-       }
-    }
-    
-    if (team.tokens >= 100) team.hasLowBalanceWarned = false;
-    
-    await this.save();
-    return { success: true, promo };
-  }
-
   // --- Payments functionality ---
   async getPayments() {
     return this.data.payments;
   }
 
-  async createPayment(userId, teamId, amount, screenshot, type, value, packageName = '', days = null) {
+  async createPayment(userId, teamId, amount, screenshot, type, value, packageName = '') {
     const payment = {
       id: Date.now().toString(),
       userId: Number(userId),
@@ -377,7 +308,6 @@ Quyidagi qoidalarga qat'iy amal qil:
       type, // 'tokens' or 'unlimited'
       value: Number(value),
       packageName,
-      days: days ? Number(days) : null,
       status: 'PENDING',
       createdAt: new Date().toISOString()
     };
@@ -392,25 +322,16 @@ Quyidagi qoidalarga qat'iy amal qil:
       payment.status = 'APPROVED';
       const team = await this.getTeam(payment.teamId);
       if (team) {
-        if (payment.type.startsWith('monthly_') || payment.type === 'unlimited') {
-          team.activeSubscription = payment.type;
-          let expirationDays = payment.days || 30; // default 30 days if not set, but if explicit 0 it means unlimited
-          if (payment.days === 0) {
-            team.subscriptionExpiresAt = new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString(); // 100 years
+        if (payment.type === 'package' || payment.type.startsWith('monthly_') || payment.type === 'unlimited') {
+          team.activeSubscription = payment.packageId || payment.type;
+          if (payment.days) {
+            team.subscriptionExpiresAt = new Date(Date.now() + payment.days * 24 * 3600 * 1000).toISOString();
           } else {
-            team.subscriptionExpiresAt = new Date(Date.now() + expirationDays * 24 * 3600 * 1000).toISOString();
+            team.subscriptionExpiresAt = null; // Cheksiz muddat
           }
           team.maxConcurrentJobs = 3;
         } else {
           team.tokens = (team.tokens || 0) + Number(payment.value);
-          // if tokens have expiration
-          if (payment.days !== null && payment.days !== undefined) {
-             if (payment.days === 0) {
-                team.subscriptionExpiresAt = new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString();
-             } else {
-                team.subscriptionExpiresAt = new Date(Date.now() + payment.days * 24 * 3600 * 1000).toISOString();
-             }
-          }
         }
         if (team.tokens >= 100) {
           team.hasLowBalanceWarned = false;
