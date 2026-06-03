@@ -317,6 +317,26 @@ export default function App() {
     }
   };
 
+  const handleDownloadBackup = async (filename: string) => {
+    try {
+      setBackupsError('');
+      const res = await fetch(`/api/admin/backups/download/${filename}`);
+      if (!res.ok) throw new Error("Yuklab olishda xatolik yuz berdi");
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      setBackupsError(err.message);
+    }
+  };
+
   const handleUploadBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -931,7 +951,7 @@ export default function App() {
     setConfigSaveSuccess(false);
     setErrorPrompt('');
     try {
-      const geminiApiKey = apiKeys.map(k => k.trim()).filter(Boolean).join('\n');
+      const geminiApiKey = apiKeys.map(k => k.trim()).filter(Boolean).join(',');
       const res = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2175,8 +2195,12 @@ export default function App() {
                               </div>
 
                               <div className="text-[9px] text-sky-300 space-y-1 bg-slate-900/60 p-2 rounded border border-slate-900/80">
+                                {item.quality && <div>🎞 <span className="text-slate-500">Sifat:</span> <span className="font-bold text-amber-400">{item.quality}</span> {item.sizeBytes ? `(${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB)` : ''}</div>}
                                 <div>📝 <span className="text-slate-500">Sub File:</span> <span className="select-all">{item.subName}</span></div>
                                 <div>🎬 <span className="text-slate-500">MKV Name:</span> <span className="select-all">{item.mkvName}</span></div>
+                                {item.magnet && (
+                                  <div className="truncate">🧲 <span className="text-slate-500">Magnet:</span> <span className="text-slate-400 select-all" title={item.magnet}>{item.magnet.substring(0, 45)}...</span></div>
+                                )}
                                 {item.subLink && (
                                   <div>🔗 <span className="text-slate-500">Kanal Havolasi:</span> <a href={item.subLink} target="_blank" rel="noopener noreferrer" className="text-emerald-400 underline">Telegram Link</a></div>
                                 )}
@@ -3081,6 +3105,12 @@ export default function App() {
                                       {(bk.size / 1024).toFixed(2)} KB
                                     </td>
                                     <td className="py-2.5 text-right">
+                                      <button
+                                        onClick={() => handleDownloadBackup(bk.filename)}
+                                        className="bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/20 text-[10px] font-semibold px-3 py-1 rounded cursor-pointer transition-all duration-150 inline-block mr-2"
+                                      >
+                                        Yuklash
+                                      </button>
                                       <button
                                         onClick={() => handleRestoreBackup(bk.filename)}
                                         className="bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-slate-950 border border-sky-500/20 text-[10px] font-semibold px-3 py-1 rounded cursor-pointer transition-all duration-150 inline-block"

@@ -29,6 +29,20 @@ if (db && db.data) {
   if (!db.data.settings) {
     db.data.settings = {};
   }
+
+  if (db.data.settings.botToken && !process.env.BOT_TOKEN) {
+    process.env.BOT_TOKEN = db.data.settings.botToken;
+  }
+  if (db.data.settings.geminiApiKey && !process.env.GEMINI_API_KEY) {
+    process.env.GEMINI_API_KEY = db.data.settings.geminiApiKey;
+  }
+  if (db.data.settings.telegramApiId && !process.env.TELEGRAM_API_ID) {
+    process.env.TELEGRAM_API_ID = db.data.settings.telegramApiId;
+  }
+  if (db.data.settings.telegramApiHash && !process.env.TELEGRAM_API_HASH) {
+    process.env.TELEGRAM_API_HASH = db.data.settings.telegramApiHash;
+  }
+
   if (db.data.settings.auto_download_enabled === undefined) {
     db.data.settings.auto_download_enabled = false;
   }
@@ -538,6 +552,10 @@ app.post('/api/config', async (req, res) => {
     await fs.writeFile('.env', envContent, 'utf-8');
 
     await db.updateSettings({
+      botToken: botToken,
+      geminiApiKey: geminiApiKey,
+      telegramApiId: telegramApiId || '',
+      telegramApiHash: telegramApiHash || '',
       defaultBatchSize: parseInt(defaultBatchSize) || 45,
       systemPrompt: systemPrompt || '',
       auto_download_enabled: !!auto_download_enabled,
@@ -666,6 +684,28 @@ app.get('/api/admin/backups', async (req, res) => {
     // Sort descending (newest first)
     list.sort((a, b) => b.filename.localeCompare(a.filename));
     res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/backups/download/:filename', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const safePattern = /^backup_\d{4}-\d{2}-\d{2}\.json$/;
+    if (!safePattern.test(filename)) {
+      return res.status(400).json({ error: 'Invalid backup file name' });
+    }
+    const backupPath = path.join('backups', filename);
+    try {
+      await fs.access(backupPath);
+    } catch (e) {
+      return res.status(404).json({ error: 'Backup file not found' });
+    }
+    const content = await fs.readFile(backupPath, 'utf-8');
+    res.setHeader('Content-disposition', `attachment; filename=${filename}`);
+    res.setHeader('Content-type', 'application/json');
+    res.send(content);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1140,7 +1180,7 @@ async function restartBot(token) {
   if (activeBotInstance) {
     try {
       logEvent('INFO', 'Stopping running Telegraf Bot instance...');
-      await activeBotInstance.stop();
+      activeBotInstance.stop('SIGINT');
     } catch (e) {
       logEvent('ERROR', `Error stopping bot: ${e.message}`);
     }
@@ -1154,9 +1194,15 @@ async function restartBot(token) {
   try {
     logEvent('INFO', 'Initializing fresh Telegraf Bot instance...');
     const bot = new Telegraf(token);
+
+    bot.catch((err, ctx) => {
+      console.error(`Bot encountered an error for ${ctx.updateType}`, err);
+      logEvent('ERROR', `Telegram Bot API Error: ${err.message}`);
+    });
+
     setupBotHandlers(bot);
 
-    bot.launch()
+    bot.launch({ dropPendingUpdates: true })
       .then(() => {
         logEvent('SUCCESS', 'Telegram Bot successfully started and listening to updates!');
       })
@@ -1641,8 +1687,10 @@ function setupBotHandlers(bot) {
         const buttons = [[Markup.button.callback("⬅️ Orqaga", "back_to_menu")]];
         try {
           await ctx.editMessageText(text, Markup.inlineKeyboard(buttons));
-        } catch (_) {
-          await ctx.reply(text, Markup.inlineKeyboard(buttons));
+        } catch (err) {
+          if (!err.message || !err.message.includes('is not modified')) {
+            try { await ctx.reply(text, Markup.inlineKeyboard(buttons)); } catch (e) { }
+          }
         }
         return;
       }
@@ -1663,8 +1711,10 @@ function setupBotHandlers(bot) {
         ];
         try {
           await ctx.editMessageText(purchaseText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
-        } catch (_) {
-          await ctx.reply(purchaseText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+        } catch (err) {
+          if (!err.message || !err.message.includes('is not modified')) {
+            try { await ctx.reply(purchaseText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) }); } catch (e) { }
+          }
         }
         return;
       }
@@ -1679,15 +1729,17 @@ function setupBotHandlers(bot) {
       const allowedList = completedList.slice(0, limit);
 
       if (allowedList.length === 0) {
-        const emptyText = "🌸 **Yangi Anime Subtitrlari (SubsPlease)**\n\nHozirda tayyor (Toliq yuklangan) yangi epizodlar mavjud emas. Iltimos, tizim yangi anime yuklab, o'zbekchalashtirishini kuting!";
+        const emptyText = `🌸 **Yangi Anime Subtitrlari (SubsPlease)**\n\nHozirda tayyor (Toliq yuklangan) yangi epizodlar mavjud emas. Iltimos, tizim yangi anime yuklab, o'zbekchalashtirishini kuting!\n\n_🕒 So'nggi yangilanish: ${new Date().toLocaleTimeString('uz-UZ')}_`;
         const emptyButtons = [
           [Markup.button.callback("🔄 Yangilash", `action_new_subtitles_page_${pageIndex}`)],
           [Markup.button.callback("⬅️ Orqaga", "back_to_menu")]
         ];
         try {
-          await ctx.editMessageText(emptyText, Markup.inlineKeyboard(emptyButtons));
-        } catch (_) {
-          await ctx.reply(emptyText, Markup.inlineKeyboard(emptyButtons));
+          await ctx.editMessageText(emptyText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(emptyButtons) });
+        } catch (err) {
+          if (!err.message || !err.message.includes('is not modified')) {
+            try { await ctx.reply(emptyText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(emptyButtons) }); } catch (e) { }
+          }
         }
         return;
       }
@@ -1697,7 +1749,7 @@ function setupBotHandlers(bot) {
       const startIdx = pageIndex * itemsPerPage;
       const pagedList = allowedList.slice(startIdx, startIdx + itemsPerPage);
 
-      let header = `🌸 **Yangi Anime Subtitrlari (SubsPlease)**\n\nJamoa Tarifikgiz: **${team.activeSubscription.replace('monthly_', '').toUpperCase()}** (Maksimal so'nggi ${limit} tani ko'ra olasiz).\n\nQuyidagi ro'yxatdan kerakli epizodlarni tanlang va bevosita yuklab oling:\n`;
+      let header = `🌸 **Yangi Anime Subtitrlari (SubsPlease)**\n\nJamoa Tarifikgiz: **${team.activeSubscription.replace('monthly_', '').toUpperCase()}** (Maksimal so'nggi ${limit} tani ko'ra olasiz).\n\nQuyidagi ro'yxatdan kerakli epizodlarni tanlang va bevosita yuklab oling:\n\n_🕒 So'nggi yangilanish: ${new Date().toLocaleTimeString('uz-UZ')}_\n`;
 
       const buttons = [];
       for (const ep of pagedList) {
@@ -1729,11 +1781,15 @@ function setupBotHandlers(bot) {
           parse_mode: 'Markdown',
           ...Markup.inlineKeyboard(buttons)
         });
-      } catch (_) {
-        await ctx.reply(header, {
-          parse_mode: 'Markdown',
-          ...Markup.inlineKeyboard(buttons)
-        });
+      } catch (err) {
+        if (!err.message || !err.message.includes('is not modified')) {
+          try {
+            await ctx.reply(header, {
+              parse_mode: 'Markdown',
+              ...Markup.inlineKeyboard(buttons)
+            });
+          } catch (e) { }
+        }
       }
     } catch (e) {
       console.error(e);
