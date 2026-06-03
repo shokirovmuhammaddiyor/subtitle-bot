@@ -2431,7 +2431,7 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                            {promocodes.map((promo) => (
+                            {[...promocodes].reverse().map((promo) => (
                               <div key={promo.id} className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex flex-col justify-between relative space-y-2 font-mono">
                                 <div>
                                   <div className="text-xs font-bold text-white flex justify-between items-center">
@@ -2448,7 +2448,7 @@ export default function App() {
                                     <div>Turi: <span className="text-sky-400 font-bold">{promo.type}</span></div>
                                     <div>Qiymati: <span className="text-sky-400">{promo.value}</span></div>
                                     <div>Muddat (kun): <span className="text-amber-400">{promo.days ? promo.days : 'Cheksiz'}</span></div>
-                                    <div>Ishlatilgan: <span className="text-slate-300">{promo.usedBy.length} / {promo.maxUses === 0 ? 'Cheksiz' : promo.maxUses} marta</span></div>
+                                    <div>Ishlatilgan: <span className="text-slate-300">{(promo.usedTeams || promo.usedBy || []).length} / {promo.maxUses === 0 ? 'Cheksiz' : promo.maxUses} marta</span></div>
                                   </div>
                                 </div>
                               </div>
@@ -2541,7 +2541,7 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="space-y-3 font-mono">
-                          {Array.isArray(automatedAnimes) && automatedAnimes.map((item) => (
+                          {Array.isArray(automatedAnimes) && [...automatedAnimes].reverse().map((item) => (
                             <div key={item.id} className="p-3 bg-slate-950 border border-slate-800/80 rounded-lg space-y-2">
                               <div className="flex justify-between items-start flex-wrap gap-1">
                                 <div>
@@ -2698,7 +2698,7 @@ export default function App() {
                       <div className="py-12 text-center text-xs text-slate-500 font-mono">Hali birorta ham jamoa yaratilmagan.</div>
                     ) : (
                       <div className="space-y-3">
-                        {teams.map((team) => (
+                        {[...teams].reverse().map((team) => (
                           <div key={team.id} className="p-4 bg-slate-900 border border-slate-800 rounded-lg space-y-3">
                             <div className="flex justify-between items-start flex-wrap gap-2">
                               <div>
@@ -2840,7 +2840,7 @@ export default function App() {
                       <div className="py-12 text-center text-xs text-slate-500 font-mono">Xozircha hech qanday to'lovlar yuklanmagan.</div>
                     ) : (
                       <div className="grid grid-cols-1 gap-3">
-                        {payments.map((p) => (
+                        {[...payments].reverse().map((p) => (
                           <div key={p.id} className="p-4 bg-slate-900 border border-slate-800 rounded-lg flex flex-col sm:flex-row gap-4 justify-between items-start">
                             <div className="space-y-1.5 flex-1 min-w-0">
                               <div className="flex items-center gap-2">
