@@ -13,7 +13,8 @@ export class Database {
       settings: null,
       automatedAnimes: [],
       promocodes: [],
-      backups: []
+      backups: [],
+      translationCache: []
     };
   }
 
@@ -32,7 +33,8 @@ export class Database {
         settings: parsed.settings || null,
         automatedAnimes: parsed.automatedAnimes || [],
         promocodes: parsed.promocodes || [],
-        backups: parsed.backups || []
+        backups: parsed.backups || [],
+        translationCache: parsed.translationCache || []
       };
 
       if (!this.data.settings) {

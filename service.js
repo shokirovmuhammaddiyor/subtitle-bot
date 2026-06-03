@@ -1,9 +1,117 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import crypto from 'crypto';
+import { db } from './database.js';
 
 let aiClients = {};
+const keyStates = {};
+let lastKeysInput = '';
+
+let logger = (type, message) => {
+  console.warn(`[${type}] ${message}`);
+};
+
+export function setLogger(customLogger) {
+  logger = customLogger;
+}
 
 export function resetAi() {
   aiClients = {};
+  for (const k in keyStates) {
+    delete keyStates[k];
+  }
+  lastKeysInput = '';
+}
+
+function getKeyState(key) {
+  if (!keyStates[key]) {
+    keyStates[key] = {
+      blockedUntil: 0,
+      invalid: false,
+      lastUsed: 0
+    };
+  }
+  return keyStates[key];
+}
+
+function getAvailableKey(keys) {
+  const now = Date.now();
+  const validKeys = keys.filter(k => !getKeyState(k).invalid);
+  if (validKeys.length === 0) {
+    throw new Error('All configured Gemini API keys are invalid.');
+  }
+
+  const activeKeys = validKeys.filter(k => getKeyState(k).blockedUntil <= now);
+
+  if (activeKeys.length > 0) {
+    // Select the key that was used the least recently to distribute load evenly
+    let chosenKey = activeKeys[0];
+    let minLastUsed = getKeyState(chosenKey).lastUsed;
+    for (const key of activeKeys) {
+      const state = getKeyState(key);
+      if (state.lastUsed < minLastUsed) {
+        minLastUsed = state.lastUsed;
+        chosenKey = key;
+      }
+    }
+    getKeyState(chosenKey).lastUsed = now;
+    return { key: chosenKey, waitTimeMs: 0 };
+  }
+
+  // All valid keys are blocked, find the one with the earliest unblock time
+  let bestKey = validKeys[0];
+  let minBlockedUntil = getKeyState(bestKey).blockedUntil;
+  for (const key of validKeys) {
+    const state = getKeyState(key);
+    if (state.blockedUntil < minBlockedUntil) {
+      minBlockedUntil = state.blockedUntil;
+      bestKey = key;
+    }
+  }
+
+  const waitTimeMs = Math.max(0, minBlockedUntil - now);
+  return { key: bestKey, waitTimeMs };
+}
+
+export function cleanupTranslationCache() {
+  db.data.translationCache = db.data.translationCache || [];
+  const hashes = [];
+  for (const entry of db.data.translationCache) {
+    if (!hashes.includes(entry.fileHash)) {
+      hashes.push(entry.fileHash);
+    }
+  }
+  if (hashes.length > 20) {
+    const hashesToRemove = hashes.slice(0, hashes.length - 20);
+    db.data.translationCache = db.data.translationCache.filter(
+      entry => !hashesToRemove.includes(entry.fileHash)
+    );
+  }
+}
+
+export function getRemainingTokenCount(content, ext, targetLanguage) {
+  const parsed = parseSubtitles(content, ext);
+  const dialogues = parsed.filter(l => l.isDialogue);
+  const fileHash = crypto.createHash('sha256').update(content).digest('hex');
+
+  db.data.translationCache = db.data.translationCache || [];
+  const cachedEntries = db.data.translationCache.filter(
+    entry => entry.fileHash === fileHash && entry.targetLanguage === targetLanguage
+  );
+
+  const cacheMap = new Map();
+  for (const entry of cachedEntries) {
+    cacheMap.set(`${entry.lineIndex}_${entry.originalText}`, entry.translatedText);
+  }
+
+  let remaining = 0;
+  for (let i = 0; i < dialogues.length; i++) {
+    const d = dialogues[i];
+    if (!cacheMap.has(`${i}_${d.cleanText}`)) {
+      remaining++;
+    }
+  }
+
+  return { total: dialogues.length, remaining, fileHash };
 }
 
 function getAi(key) {
@@ -137,9 +245,41 @@ export async function translateSubtitles({
   const total = dialogues.length;
   if (total === 0) return rebuildSubtitles(parsed, ext);
 
+  const fileHash = crypto.createHash('sha256').update(content).digest('hex');
+
+  // Load from translationCache
+  db.data.translationCache = db.data.translationCache || [];
+  const cachedEntries = db.data.translationCache.filter(
+    entry => entry.fileHash === fileHash && entry.targetLanguage === targetLanguage
+  );
+
+  const cacheMap = new Map();
+  for (const entry of cachedEntries) {
+    cacheMap.set(`${entry.lineIndex}_${entry.originalText}`, entry.translatedText);
+  }
+
+  // Populate already cached lines, and collect untranslated ones
+  const untranslatedDialogues = [];
+  for (let i = 0; i < dialogues.length; i++) {
+    const d = dialogues[i];
+    const cachedVal = cacheMap.get(`${i}_${d.cleanText}`);
+    if (cachedVal) {
+      d.translatedText = cachedVal;
+    } else {
+      untranslatedDialogues.push({ d, originalIndex: i });
+    }
+  }
+
+  logger('INFO', `Translation session start: File hash ${fileHash}. Total lines: ${total}, Untranslated: ${untranslatedDialogues.length}.`);
+
+  if (untranslatedDialogues.length === 0) {
+    logger('SUCCESS', `All lines loaded from cache. Rebuilding subtitles instantly...`);
+    return rebuildSubtitles(parsed, ext);
+  }
+
   const chunks = [];
-  for (let i = 0; i < dialogues.length; i += batchSize) {
-    chunks.push(dialogues.slice(i, i + batchSize));
+  for (let i = 0; i < untranslatedDialogues.length; i += batchSize) {
+    chunks.push(untranslatedDialogues.slice(i, i + batchSize));
   }
 
   const keysInput = process.env.GEMINI_API_KEY || '';
@@ -148,13 +288,21 @@ export async function translateSubtitles({
     throw new Error('GEMINI_API_KEY is not configured');
   }
 
+  // Clear/reset key states if the keys input changes
+  if (keysInput !== lastKeysInput) {
+    for (const k in keyStates) {
+      delete keyStates[k];
+    }
+    lastKeysInput = keysInput;
+  }
+
   const startTime = Date.now();
-  let translatedCount = 0;
-  let activeKeyIndex = 0;
+  // We initialize translatedCount to include the already cached lines!
+  let translatedCount = total - untranslatedDialogues.length;
 
   for (let c = 0; c < chunks.length; c++) {
     const chunk = chunks[c];
-    const payload = chunk.map(l => ({ id: l.id, text: l.cleanText }));
+    const payload = chunk.map(item => ({ id: item.d.id, text: item.d.cleanText }));
     
     // Interpolate dynamic placeholders like {movie_name}, {project_title}, {kino_nomi}, {episode_number}, {qism_raqami}
     let interpolatedPrompt = systemPrompt || "Do'stona va erkin uslubda tarjima qil. Ma'noni to'liq yetkaz va o'zbekcha jargonlarni o'rnida ishlat.";
@@ -185,10 +333,37 @@ export async function translateSubtitles({
       
     const userPrompt = `Context/Tone constraints: ${qualityPrompt || 'Translate naturally.'}\n\nTask: Translate the following subtitle lines to ${targetLanguage}. Keep structural meaning and emotion. Return matching count & IDs.\n\nJSON array:\n${JSON.stringify(payload)}`;
 
-    let attempts = 0;
-    while (attempts < 12) {
-      const currentKey = keys[activeKeyIndex];
+    let chunkSuccess = false;
+    let chunkAttempts = 0;
+    const maxChunkAttempts = 20;
+
+    while (!chunkSuccess && chunkAttempts < maxChunkAttempts) {
+      let keyInfo;
+      try {
+        keyInfo = getAvailableKey(keys);
+      } catch (err) {
+        logger('ERROR', `API Key Selection Failed: ${err.message}`);
+        throw new Error(`TRANSLATION_FAILED: Barcha kiritilgan API kalitlar yaroqsiz! Tafsilot: ${err.message}`);
+      }
+
+      const { key: currentKey, waitTimeMs } = keyInfo;
+
+      if (waitTimeMs > 0) {
+        logger('INFO', `[KEY ROTATION] All keys blocked. Waiting ${Math.ceil(waitTimeMs / 1000)}s for the next key to unblock...`);
+        // Notify progress about the wait
+        await onProgress({
+          total,
+          translated: translatedCount,
+          eta: `Limit kutilmoqda (${Math.ceil(waitTimeMs / 1000)}s)...`,
+          progressBar: `[${'█'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
+        });
+        await new Promise(resolve => setTimeout(resolve, waitTimeMs));
+        continue;
+      }
+
+      chunkAttempts++;
       const ai = getAi(currentKey);
+
       try {
         const response = await ai.models.generateContent({
           model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
@@ -212,65 +387,90 @@ export async function translateSubtitles({
 
         const resText = response.text;
         const results = JSON.parse(resText);
+
+        db.data.translationCache = db.data.translationCache || [];
+
         for (const item of results) {
-          const matched = dialogues.find(d => d.id === item.id);
-          if (matched) {
-            matched.translatedText = item.translated_text;
+          const chunkItem = chunk.find(cItem => cItem.d.id === item.id);
+          if (chunkItem) {
+            chunkItem.d.translatedText = item.translated_text;
+
+            // Push to cache
+            db.data.translationCache.push({
+              fileHash,
+              lineIndex: chunkItem.originalIndex,
+              originalText: chunkItem.d.cleanText,
+              translatedText: item.translated_text,
+              targetLanguage
+            });
           }
         }
-        break;
-      } catch (err) {
-        attempts++;
-        const errMsg = err.message || '';
-        console.warn(`[GEMINI API WARNING] Key #${activeKeyIndex} failed (attempt ${attempts}): ${errMsg.substring(0, 150)}`);
 
-        // 429 / quota xatosi: retryDelay parse qilib shu vaqt kutish
-        let backoff = 6000;
-        const is429 = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
-        if (is429) {
+        cleanupTranslationCache();
+        await db.save();
+
+        chunkSuccess = true;
+      } catch (err) {
+        const errMsg = err.message || '';
+        logger('WARNING', `[GEMINI API WARNING] Key failure (attempt ${chunkAttempts}): ${errMsg.substring(0, 150)}`);
+
+        // Check error type
+        const is429 = errMsg.includes('429') || 
+                      errMsg.includes('RESOURCE_EXHAUSTED') || 
+                      errMsg.includes('quota') || 
+                      errMsg.includes('limit exceeded') || 
+                      errMsg.includes('exhausted');
+
+        const isInvalid = errMsg.includes('API_KEY_INVALID') || 
+                          errMsg.includes('API key not valid') || 
+                          errMsg.includes('invalid API key') || 
+                          errMsg.includes('key not found') ||
+                          (errMsg.includes('API key') && (errMsg.includes('invalid') || errMsg.includes('expired')));
+
+        const state = getKeyState(currentKey);
+
+        if (isInvalid) {
+          state.invalid = true;
+          logger('WARNING', `[KEY ROTATION] Key marked as INVALID.`);
+        } else if (is429) {
+          let cooldownMs = 60000;
           const retryMatch = errMsg.match(/"retryDelay"\s*:\s*"(\d+)s"/) || errMsg.match(/retry in (\d+(?:\.\d+)?)s/i);
           if (retryMatch) {
             const retrySeconds = Math.ceil(parseFloat(retryMatch[1]));
-            backoff = Math.min(retrySeconds * 1000 + 1000, 65000);
+            cooldownMs = Math.min(retrySeconds * 1000 + 1000, 120000);
+          } else if (errMsg.includes('daily') || errMsg.includes('per day')) {
+            cooldownMs = 4 * 60 * 60 * 1000; // 4 hours for daily limits
+            logger('WARNING', `[KEY ROTATION] Key marked as DAILY LIMIT EXHAUSTED (4 hours cooldown).`);
           } else {
-            backoff = 20000;
+            cooldownMs = 60000;
           }
+          state.blockedUntil = Date.now() + cooldownMs;
+          logger('WARNING', `[KEY ROTATION] Key marked as BLOCKED for ${Math.ceil(cooldownMs / 1000)}s.`);
+        } else {
+          state.blockedUntil = Date.now() + 5000;
+          logger('WARNING', `[KEY ROTATION] Key temporary failure. Cooldown: 5s.`);
         }
 
-        // Alternativ kalit bo'lsa darhol almashtirib ko'rish
-        if (keys.length > 1) {
-          activeKeyIndex = (activeKeyIndex + 1) % keys.length;
-          console.warn(`[FAILOVER] Switching to key #${activeKeyIndex + 1}`);
-          await onProgress({
-            total,
-            translated: translatedCount,
-            eta: `Tarjima davom etmoqda...`,
-            progressBar: `[${'\u2588'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
-          });
-          if (attempts < keys.length) {
-            continue;
-          }
-        }
-
-        if (attempts >= 12) {
-          throw new Error(`TRANSLATION_FAILED: Tarjima serveri band yoki kalit chekovi tugadi. (${attempts} urinish)`);
-        }
-
-        console.warn(`[RETRY] Waiting ${backoff}ms...`);
+        // Notify progress about switching key
         await onProgress({
           total,
           translated: translatedCount,
-          eta: `Tarjima davom etmoqda... (${Math.round(backoff / 1000)}s)`,
-          progressBar: `[${'\u2588'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
+          eta: `Kalit almashtirilmoqda...`,
+          progressBar: `[${'█'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
         });
-        await new Promise(resolve => setTimeout(resolve, backoff));
       }
+    }
+
+    if (!chunkSuccess) {
+      logger('ERROR', `Translation failed for chunk after ${chunkAttempts} attempts.`);
+      throw new Error(`TRANSLATION_FAILED: Tarjima serveri band yoki barcha kalit limitlari tugadi. (${chunkAttempts} urinishdan so'ng)`);
     }
 
     translatedCount += chunk.length;
     const progress = translatedCount / total;
     const elapsed = Date.now() - startTime;
-    const rate = elapsed / translatedCount;
+    const actualTranslatedCount = translatedCount - (total - untranslatedDialogues.length);
+    const rate = actualTranslatedCount > 0 ? elapsed / actualTranslatedCount : 0;
     const remainingTime = (total - translatedCount) * rate;
     const etaSec = Math.round(remainingTime / 1000);
     const etaStr = etaSec > 0 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : '0s';
@@ -290,5 +490,6 @@ export async function translateSubtitles({
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
 
+  logger('SUCCESS', `Translation completed successfully for file hash: ${fileHash}`);
   return rebuildSubtitles(parsed, ext);
 }

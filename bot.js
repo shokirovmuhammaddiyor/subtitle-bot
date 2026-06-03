@@ -10,7 +10,7 @@ import yaml from 'js-yaml';
 import fs from 'fs/promises';
 import path from 'path';
 import { db } from './database.js';
-import { translateSubtitles, resetAi } from './service.js';
+import { translateSubtitles, resetAi, setLogger } from './service.js';
 
 let systemLogs = [
   { time: new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }), type: 'INFO', message: 'SubTrans AI Architect engine initialized.' }
@@ -21,6 +21,8 @@ function logEvent(type, message) {
   systemLogs.unshift({ time, type, message });
   if (systemLogs.length > 50) systemLogs.pop();
 }
+
+setLogger(logEvent);
 
 async function fetchSubsPlease(endpoint) {
   const url = endpoint.startsWith('http') ? endpoint : `https://subsplease.org${endpoint}`;
@@ -3055,17 +3057,17 @@ async function runTranslation(ctx, user) {
     return ctx.reply("Siz hech qaysi jamoaga a'zo emassiz!");
   }
 
-  // Parse lines to check token expenditure rules (1 dialogue line = 1 token)
-  let parsedSubtitlesObj;
+  // Parse lines and compute required tokens based on untranslated remaining lines
+  let totalDialoguesCount = 0;
+  let requiredTokens = 0;
   try {
-    const { parseSubtitles } = await import('./service.js');
-    parsedSubtitlesObj = parseSubtitles(session.fileContent, session.fileExt);
+    const { getRemainingTokenCount } = await import('./service.js');
+    const { total, remaining } = getRemainingTokenCount(session.fileContent, session.fileExt, session.targetLanguage);
+    totalDialoguesCount = total;
+    requiredTokens = remaining;
   } catch (err) {
     return ctx.reply("Subtitr faylini tahlil qilishda xatolik yuz berdi.");
   }
-
-  const dialogueRows = parsedSubtitlesObj.filter(l => l.isDialogue);
-  const requiredTokens = dialogueRows.length;
 
   if (team.tokens < requiredTokens) {
     const alertMsg = `Jamoangiz balansida yetarli tokenlar mavjud emas. Ushbu sarlavha uchun jami **${requiredTokens}** ta token talab qilinadi, sizda esa **${team.tokens}** ta bor. Iltimos, balansni to'ldiring.`;
@@ -3129,7 +3131,7 @@ async function runTranslation(ctx, user) {
     }
   }
 
-  let translatedCount = 0;
+  let translatedCount = totalDialoguesCount - requiredTokens;
 
   try {
     logEvent('INFO', `Starting job for user @${ctx.from.username || userId}. File: ${session.fileName}`);
@@ -3259,7 +3261,7 @@ async function runTranslation(ctx, user) {
     await db.updateUser(userId, { state: 'IDLE', currentSession: null });
 
     // Safe refund: sarflanmagan tokenlarni qaytarish
-    const unusedLimit = requiredTokens - translatedCount;
+    const unusedLimit = totalDialoguesCount - translatedCount;
     if (unusedLimit > 0) {
       const liveTeam = await db.getTeam(team.id);
       if (liveTeam) {
