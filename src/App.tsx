@@ -634,6 +634,87 @@ export default function App() {
     setTelegramLoading(false);
   };
 
+  const [loginMethod, setLoginMethod] = useState<'phone' | 'qr'>('phone');
+  const [qrSessionId, setQrSessionId] = useState<string | null>(null);
+  const [qrUrl, setQrUrl] = useState<string>('');
+  const [qrStatus, setQrStatus] = useState<string>('');
+
+  const handleStartQrLogin = async () => {
+    setTelegramLoading(true);
+    setTelegramError('');
+    setQrUrl('');
+    setQrStatus('WAITING_QR');
+    try {
+      const res = await fetch('/api/admin/telegram-client/qr-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiId: telegramApiId, apiHash: telegramApiHash })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setQrSessionId(data.qrSessionId);
+      } else {
+        setTelegramError(data.error || 'QR loginni boshlashda xatolik');
+      }
+    } catch (err: any) {
+      setTelegramError(err.message);
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const handleCancelQrLogin = async () => {
+    if (!qrSessionId) return;
+    try {
+      await fetch('/api/admin/telegram-client/qr-cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: qrSessionId })
+      });
+    } catch (e) {}
+    setQrSessionId(null);
+    setQrUrl('');
+    setQrStatus('');
+  };
+
+  useEffect(() => {
+    if (!qrSessionId) return;
+
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/admin/telegram-client/qr-status?id=${qrSessionId}`);
+        if (!res.ok || !active) return;
+        const data = await res.json();
+        
+        if (data.status === 'SCANNING' || data.status === 'WAITING_QR') {
+          setQrUrl(data.qrUrl || '');
+          setQrStatus(data.status);
+        } else if (data.status === 'CONNECTED') {
+          setQrSessionId(null);
+          setQrUrl('');
+          setQrStatus('');
+          await fetchTelegramStatus();
+        } else if (data.status === 'ERROR') {
+          setTelegramError(data.error || 'QR kod skanerlashda xatolik yuz berdi');
+          setQrSessionId(null);
+          setQrUrl('');
+          setQrStatus('');
+        }
+      } catch (err) {
+        console.error("QR status poll error:", err);
+      }
+    };
+
+    const interval = setInterval(poll, 2000);
+    poll(); // run immediately
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [qrSessionId]);
+
   const handleAddApiKey = () => {
     setApiKeys([...apiKeys, '']);
   };
@@ -1709,6 +1790,32 @@ export default function App() {
 
                       {telegramStatus.status === 'DISCONNECTED' && (
                         <div className="space-y-3">
+                          {/* Login Method Toggle */}
+                          <div className="flex bg-slate-950 p-1 border border-slate-800 rounded-lg">
+                            <button
+                              type="button"
+                              onClick={() => setLoginMethod('phone')}
+                              className={`flex-1 text-center py-1.5 text-xs font-bold rounded transition-all cursor-pointer ${
+                                loginMethod === 'phone'
+                                  ? 'bg-sky-500 text-slate-950'
+                                  : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              📞 Telefon raqami
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setLoginMethod('qr')}
+                              className={`flex-1 text-center py-1.5 text-xs font-bold rounded transition-all cursor-pointer ${
+                                loginMethod === 'qr'
+                                  ? 'bg-sky-500 text-slate-950'
+                                  : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              📷 QR Kod orqali
+                            </button>
+                          </div>
+
                           <div className="grid grid-cols-2 gap-2">
                             <div>
                               <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">API ID</label>
@@ -1731,24 +1838,74 @@ export default function App() {
                               />
                             </div>
                           </div>
-                          <div>
-                            <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Telefon raqami (xalqaro formatda)</label>
-                            <input
-                              type="text"
-                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                              placeholder="+998901234567"
-                              value={telegramPhone}
-                              onChange={(e) => setTelegramPhone(e.target.value)}
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            disabled={telegramLoading}
-                            onClick={handleSendTelegramCode}
-                            className="bg-sky-500 hover:bg-sky-600 disabled:opacity-50 text-slate-950 px-3.5 py-1.8 text-xs font-bold rounded cursor-pointer uppercase tracking-wider transition-colors"
-                          >
-                            {telegramLoading ? 'Yuborilmoqda...' : 'Tasdiqlash kodini yuborish'}
-                          </button>
+
+                          {loginMethod === 'phone' ? (
+                            <>
+                              <div>
+                                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Telefon raqami (xalqaro formatda)</label>
+                                <input
+                                  type="text"
+                                  className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                                  placeholder="+998901234567"
+                                  value={telegramPhone}
+                                  onChange={(e) => setTelegramPhone(e.target.value)}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                disabled={telegramLoading}
+                                onClick={handleSendTelegramCode}
+                                className="bg-sky-500 hover:bg-sky-600 disabled:opacity-50 text-slate-950 px-3.5 py-1.8 text-xs font-bold rounded cursor-pointer uppercase tracking-wider transition-colors"
+                              >
+                                {telegramLoading ? 'Yuborilmoqda...' : 'Tasdiqlash kodini yuborish'}
+                              </button>
+                            </>
+                          ) : (
+                            <div className="space-y-3 pt-2">
+                              {qrSessionId ? (
+                                <div className="flex flex-col items-center justify-center p-4 bg-slate-950 border border-slate-800 rounded-lg space-y-3 text-center">
+                                  {qrUrl ? (
+                                    <div className="p-3 bg-white rounded-lg shadow-lg shadow-sky-500/10">
+                                      <img
+                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrUrl)}`}
+                                        alt="Telegram Login QR Code"
+                                        className="w-[180px] h-[180px]"
+                                      />
+                                    </div>
+                                  ) : (
+                                    <div className="w-[180px] h-[180px] flex items-center justify-center bg-slate-900 border border-slate-800 rounded-lg">
+                                      <div className="w-6 h-6 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+                                    </div>
+                                  )}
+                                  <div className="space-y-1">
+                                    <div className="text-xs font-bold text-sky-400 font-sans">Telegram ilovangizdan skanerlang</div>
+                                    <div className="text-[10px] text-slate-400 leading-normal font-sans">
+                                      Sozlamalar &gt; Qurilmalar &gt; Qurilmani ulash bo'limiga o'ting va ushbu QR kodni skanerlang.
+                                    </div>
+                                    <div className="text-[10px] text-amber-400 animate-pulse pt-1 font-mono">
+                                      Holat: {qrStatus === 'SCANNING' ? 'Skanerlanishi kutilmoqda...' : 'QR kod tayyorlanmoqda...'}
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={handleCancelQrLogin}
+                                    className="text-slate-400 hover:text-rose-400 text-xs py-1 cursor-pointer underline"
+                                  >
+                                    Bekor qilish
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={telegramLoading}
+                                  onClick={handleStartQrLogin}
+                                  className="w-full bg-sky-500 hover:bg-sky-600 disabled:opacity-50 text-slate-950 px-3.5 py-2 text-xs font-bold rounded cursor-pointer uppercase tracking-wider transition-colors"
+                                >
+                                  {telegramLoading ? 'Yuklanmoqda...' : 'QR Kodni Ko\'rsatish'}
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
 

@@ -11,7 +11,8 @@ export class Database {
       payments: [],
       ratings: [],
       settings: null,
-      automatedAnimes: []
+      automatedAnimes: [],
+      promocodes: []
     };
   }
 
@@ -28,7 +29,8 @@ export class Database {
         payments: parsed.payments || [],
         ratings: parsed.ratings || [],
         settings: parsed.settings || null,
-        automatedAnimes: parsed.automatedAnimes || []
+        automatedAnimes: parsed.automatedAnimes || [],
+        promocodes: parsed.promocodes || []
       };
 
       if (!this.data.settings) {
@@ -352,6 +354,81 @@ Quyidagi qoidalarga qat'iy amal qil:
       return true;
     }
     return false;
+  }
+
+  async getPromocodes() {
+    return this.data.promocodes || [];
+  }
+
+  async createPromocode(code, type, value, days, maxUses) {
+    if (!this.data.promocodes) {
+      this.data.promocodes = [];
+    }
+    const promo = {
+      id: Date.now().toString(),
+      code: String(code).toUpperCase().trim(),
+      type,
+      value: Number(value) || 0,
+      days: Number(days) || 0,
+      maxUses: Number(maxUses) || 1,
+      uses: 0,
+      usedTeams: [],
+      createdAt: new Date().toISOString()
+    };
+    this.data.promocodes.push(promo);
+    await this.save();
+    return promo;
+  }
+
+  async deletePromocode(id) {
+    if (this.data.promocodes) {
+      this.data.promocodes = this.data.promocodes.filter(p => p.id !== id);
+      await this.save();
+    }
+  }
+
+  async usePromocode(code, teamId) {
+    if (!this.data.promocodes) {
+      this.data.promocodes = [];
+    }
+    const promo = this.data.promocodes.find(p => p.code === String(code).toUpperCase().trim());
+    if (!promo) {
+      return { success: false, error: "Promokod noto'g'ri yoki mavjud emas." };
+    }
+    if (promo.uses >= promo.maxUses) {
+      return { success: false, error: "Ushbu promokodning faollashtirish limiti tugagan." };
+    }
+    if (promo.usedTeams && promo.usedTeams.includes(teamId)) {
+      return { success: false, error: "Sizning jamoangiz ushbu promokoddan allaqachon foydalangan." };
+    }
+
+    const team = await this.getTeam(teamId);
+    if (!team) {
+      return { success: false, error: "Jamoa topilmadi." };
+    }
+
+    // Apply reward
+    if (promo.type === 'tokens') {
+      team.tokens = (team.tokens || 0) + Number(promo.value);
+    } else {
+      // Obuna
+      team.activeSubscription = promo.type;
+      if (promo.days > 0) {
+        team.subscriptionExpiresAt = new Date(Date.now() + promo.days * 24 * 3600 * 1000).toISOString();
+      } else {
+        team.subscriptionExpiresAt = null; // cheksiz
+      }
+      team.maxConcurrentJobs = 3;
+    }
+
+    if (!promo.usedTeams) {
+      promo.usedTeams = [];
+    }
+    promo.uses += 1;
+    promo.usedTeams.push(teamId);
+
+    await this.save();
+    return { success: true, promo };
   }
 }
 

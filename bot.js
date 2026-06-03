@@ -4,7 +4,7 @@ dotenv.config();
 import os from 'os';
 import { Telegraf, Markup } from 'telegraf';
 import express from 'express';
-import { sendCode, verifyCode, verify2fa } from './telegram_auth.js';
+import { sendCode, verifyCode, verify2fa, startQrLogin, getQrStatus, cancelQrLogin } from './telegram_auth.js';
 import { getConnectedClient } from './get_client.mjs';
 import yaml from 'js-yaml';
 import fs from 'fs/promises';
@@ -1098,6 +1098,57 @@ app.post('/api/admin/telegram-client/disconnect', async (req, res) => {
   }
 });
 
+app.post('/api/admin/telegram-client/qr-start', async (req, res) => {
+  try {
+    const { apiId, apiHash } = req.body;
+    const finalApiId = apiId || process.env.TELEGRAM_API_ID;
+    const finalApiHash = apiHash || process.env.TELEGRAM_API_HASH;
+    if (!finalApiId || !finalApiHash) {
+      return res.status(400).json({ error: 'Telegram API ID va API Hash kiritilishi shart' });
+    }
+    const sessionId = await startQrLogin(finalApiId, finalApiHash);
+    res.json({ success: true, qrSessionId: sessionId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/telegram-client/qr-status', async (req, res) => {
+  try {
+    const { id } = req.query;
+    if (!id) return res.status(400).json({ error: 'Session ID talab qilinadi' });
+    const status = await getQrStatus(id);
+    if (status.status === 'CONNECTED') {
+      const s = await db.getSettings();
+      s.telegram_account = {
+        phone: status.phone || 'QR Akkaunt',
+        status: 'CONNECTED',
+        apiId: s.telegram_account?.apiId || process.env.TELEGRAM_API_ID || '',
+        apiHash: s.telegram_account?.apiHash || process.env.TELEGRAM_API_HASH || '',
+        session: status.sessionString,
+        createdAt: Date.now()
+      };
+      await db.save();
+      logEvent('SUCCESS', 'Telegram akkaunti QR orqali muvaffaqiyatli ulandi: ' + s.telegram_account.phone);
+      await cancelQrLogin(id); // clean up
+    }
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/telegram-client/qr-cancel', async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'Session ID talab qilinadi' });
+    await cancelQrLogin(id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 app.get('/api/admin/promocodes', async (req, res) => {
   try {
@@ -1273,21 +1324,32 @@ function setupBotHandlers(bot) {
     } catch (e) { }
   });
 
-  // Middleware to block/ban users
+  // Middleware to block/ban users & clean up old keyboards
   bot.use(async (ctx, next) => {
     try {
       const fromId = ctx.from?.id;
       if (fromId) {
         const user = await db.getUser(fromId);
-        if (user && user.isBlocked) {
-          try {
-            if (ctx.callbackQuery) {
-              await ctx.answerCbQuery("Siz botdan blocklangansiz! / Вы заблокированы в боте! / You are blocked from this bot!", { show_alert: true });
-            } else {
-              await ctx.reply("Siz botdan blocklangansiz! / Вы заблокированы в боте! / You are blocked from this bot!");
-            }
-          } catch (e) { }
-          return; // Terminate request
+        if (user) {
+          if (user.isBlocked) {
+            try {
+              if (ctx.callbackQuery) {
+                await ctx.answerCbQuery("Siz botdan blocklangansiz! / Вы заблокированы в боте! / You are blocked from this bot!", { show_alert: true });
+              } else {
+                await ctx.reply("Siz botdan blocklangansiz! / Вы заблокированы в боте! / You are blocked from this bot!");
+              }
+            } catch (e) { }
+            return; // Terminate request
+          }
+
+          // Clean up old active inline keyboard if this is a new command or message
+          if (user.lastMenuMessageId && !ctx.callbackQuery) {
+            try {
+              await ctx.telegram.editMessageReplyMarkup(ctx.chat.id, user.lastMenuMessageId, null, null);
+            } catch (e) { }
+            user.lastMenuMessageId = null;
+            await db.updateUser(fromId, { lastMenuMessageId: null });
+          }
         }
       }
       return next();
@@ -1315,10 +1377,20 @@ function setupBotHandlers(bot) {
       const kb = Markup.inlineKeyboard([
         [Markup.button.callback(loc.btn_check_status || "🔄 Holatni tekshirish", 'btn_check_status')]
       ]);
+      let msg;
       if (edit) {
-        try { return await ctx.editMessageText(pendingText, kb); } catch (e) { }
+        try {
+          msg = await ctx.editMessageText(pendingText, kb);
+        } catch (e) {
+          msg = await ctx.reply(pendingText, kb);
+        }
+      } else {
+        msg = await ctx.reply(pendingText, kb);
       }
-      return ctx.reply(pendingText, kb);
+      if (msg && msg.message_id) {
+        await db.updateUser(user.id, { lastMenuMessageId: msg.message_id });
+      }
+      return msg;
     }
 
     if (team.status === 'BLOCKED') {
@@ -1331,7 +1403,7 @@ function setupBotHandlers(bot) {
 
     const teamNameStr = team.name || 'Noma\'lum';
     const tokensCount = team.tokens !== undefined ? team.tokens : 0;
-    const menuTitle = (loc.team_menu_title || "📋 Jamoa Boshqaruv Paneli:\n\nJamoa: **{team_name}**\nKod: `{team_id}`\nBalans: **{tokens}** Token")
+    const menuTitle = (loc.team_menu_title || "📋 Jamoa Boshqaruv Paneli:\n\nJamoa: *{team_name}*\nKod: `{team_id}`\nBalans: *{tokens}* Token")
       .replace('{team_name}', teamNameStr)
       .replace('{team_id}', team.id)
       .replace('{tokens}', tokensCount);
@@ -1343,10 +1415,20 @@ function setupBotHandlers(bot) {
       [Markup.button.callback(loc.btn_team_balance || "💰 Balans", 'action_team_balance'), Markup.button.callback("🎁 Promokod", 'action_promo')]
     ]);
 
+    let msg;
     if (edit) {
-      try { return await ctx.editMessageText(menuTitle, kb); } catch (e) { }
+      try {
+        msg = await ctx.editMessageText(menuTitle, { parse_mode: 'Markdown', ...kb });
+      } catch (e) {
+        msg = await ctx.reply(menuTitle, { parse_mode: 'Markdown', ...kb });
+      }
+    } else {
+      msg = await ctx.reply(menuTitle, { parse_mode: 'Markdown', ...kb });
     }
-    return ctx.reply(menuTitle, kb);
+    if (msg && msg.message_id) {
+      await db.updateUser(user.id, { lastMenuMessageId: msg.message_id });
+    }
+    return msg;
   }
 
   // Helper to display team creation or join code options
@@ -1357,21 +1439,34 @@ function setupBotHandlers(bot) {
       [Markup.button.callback(loc.action_create_team || "🏢 Jamoa Yaratish", 'action_create_team')],
       [Markup.button.callback(loc.action_enter_code || "🔑 Kod Orqali Kirish", 'action_enter_code')]
     ]);
+    let msg;
     if (edit) {
-      try { return await ctx.editMessageText(text, kb); } catch (e) { }
+      try {
+        msg = await ctx.editMessageText(text, kb);
+      } catch (e) {
+        msg = await ctx.reply(text, kb);
+      }
+    } else {
+      msg = await ctx.reply(text, kb);
     }
-    await ctx.reply(text, kb);
+    if (msg && msg.message_id) {
+      await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+    }
+    return msg;
   }
 
   bot.command('lang', async (ctx) => {
     try {
-      await ctx.reply("Bot interfeysi tilini tanlang / Choose bot interface language / Выберите язык " + "интерфейса бота:", Markup.inlineKeyboard([
+      const msg = await ctx.reply("Bot interfeysi tilini tanlang / Choose bot interface language / Выберите язык " + "интерфейса бота:", Markup.inlineKeyboard([
         [
           Markup.button.callback("🇺🇿 O'zbekcha", "select_bot_lang_uz"),
           Markup.button.callback("🇷🇺 Русский", "select_bot_lang_ru"),
           Markup.button.callback("🇬🇧 English", "select_bot_lang_en")
         ]
       ]));
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -1379,14 +1474,14 @@ function setupBotHandlers(bot) {
 
   bot.command('help', async (ctx) => {
     try {
-      const text = `📖 **Botdan foydalanish yo'riqnomasi:**\n\n` +
-        `1️⃣ **Bot tilini sozlash:** Buning uchun /lang buyrug'ini bering.\n` +
-        `2️⃣ **Bot sozlamalarini tahrirlash:** /settings buyrug'i orqali tarjima sifati yo'riqnomasi va har bir so'rovdagi paket (batch) hajmini tahrirlashingiz mumkin.\n` +
-        `3️⃣ **Tarjima boshlash:** Bosh menyudagi "Tarjima qilish" tugmasini bosing va biron-bir subtitr faylini (.srt, .ass, yoki .vtt) botga yuboring.\n` +
-        `4️⃣ **Jamoaviy ishlash:** Jamoa a'zolari bilan birgalikda sizda bitta umumiy balans va tarjima qilish jurnali bo'ladi.\n` +
-        `5️⃣ **Token sotib olish:** Jamoa boshqaruv panelidagi "Balans" bo'limiga o'ting va o'zingizga qulay bo'lgan paketni tanlang, to'lov qiling va rasm-screenshotini shu yerga yuboring.\n\n` +
+      const text = `📖 *Botdan foydalanish yo'riqnomasi:*\n\n` +
+        `1️⃣ *Bot tilini sozlash:* Buning uchun /lang buyrug'ini bering.\n` +
+        `2️⃣ *Bot sozlamalarini tahrirlash:* /settings buyrug'i orqali tarjima sifati yo'riqnomasi va har bir so'rovdagi paket (batch) hajmini tahrirlashingiz mumkin.\n` +
+        `3️⃣ *Tarjima boshlash:* Bosh menyudagi "Tarjima qilish" tugmasini bosing va biron-bir subtitr faylini (.srt, .ass, yoki .vtt) botga yuboring.\n` +
+        `4️⃣ *Jamoaviy ishlash:* Jamoa a'zolari bilan birgalikda sizda bitta umumiy balans va tarjima qilish jurnali bo'ladi.\n` +
+        `5️⃣ *Token sotib olish:* Jamoa boshqaruv panelidagi "Balans" bo'limiga o'ting va o'zingizga qulay bo'lgan paketni tanlang, to'lov qiling va rasm-screenshotini shu yerga yuboring.\n\n` +
         `🔄 Istalgan vaqtda boshqaruv paneliga qaytish uchun /menu yoki /start buyrug'ini yuboring.`;
-      await ctx.reply(text);
+      await ctx.reply(text, { parse_mode: 'Markdown' });
     } catch (e) {
       console.error(e);
     }
@@ -1638,15 +1733,15 @@ function setupBotHandlers(bot) {
         return u && u.teamId === team.id;
       });
 
-      const text = `📊 **${team.name}** Statistika:\n\n` +
-        `• Jami loyihalar soni: **${teamProjects.length}** ta\n` +
-        `• Parallel tarjima limiti: **${team.maxConcurrentJobs}** ta parallel\n` +
-        `• Faol jarayonlar: **${runningJobs.length}** ta\n` +
-        `• Jamoa balansi: **${team.tokens}** Token`;
+      const text = `📊 *${team.name}* Statistika:\n\n` +
+        `• Jami loyihalar soni: *${teamProjects.length}* ta\n` +
+        `• Parallel tarjima limiti: *${team.maxConcurrentJobs}* ta parallel\n` +
+        `• Faol jarayonlar: *${runningJobs.length}* ta\n` +
+        `• Jamoa balansi: *${team.tokens}* Token`;
 
-      await ctx.editMessageText(text, Markup.inlineKeyboard([
+      await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
         [Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]
-      ]));
+      ]) });
     } catch (e) {
       console.error(e);
     }
@@ -1697,24 +1792,28 @@ function setupBotHandlers(bot) {
 
       const limit = getSubscriptionLimit(team, settings);
       if (limit <= 0) {
-        const purchaseText = "⚠️ **Sizda faol Oylik Paket mavjud emas!**\n\n" +
+        const purchaseText = "⚠️ *Sizda faol Oylik Paket mavjud emas!*\n\n" +
           "Mavjud yangi anime subtitrlarini ko'rish va yuklab olish uchun jamoangiz nomidan oylik tariflardan birini faollashtiring.\n\n" +
-          "**Mavjud Oylik Tariflar (SubsPlease):**\n" +
-          "• **Boshlang'ich** - So'nggi 10 ta yangi anime qismlari (Narxi: 50,000 O'zS)\n" +
-          "• **FanDub** - So'nggi 25 ta yangi anime qismlari (Narxi: 120,000 O'zS)\n" +
-          "• **Studio** - So'nggi 50 ta yangi anime qismlari (Narxi: 200,000 O'zS)\n\n" +
+          "*Mavjud Oylik Tariflar (SubsPlease):*\n" +
+          "• *Boshlang'ich* - So'nggi 10 ta yangi anime qismlari (Narxi: 50,000 O'zS)\n" +
+          "• *FanDub* - So'nggi 25 ta yangi anime qismlari (Narxi: 120,000 O'zS)\n" +
+          "• *Studio* - So'nggi 50 ta yangi anime qismlari (Narxi: 200,000 O'zS)\n\n" +
           "Tarif sotib olish uchun jamoa hisobini to'ldirish bo'limiga o'ting:";
 
         const buttons = [
           [Markup.button.callback("💳 Jamoa hisobini to'ldirish", "action_team_balance")],
           [Markup.button.callback("⬅️ Orqaga", "back_to_menu")]
         ];
+        let msg;
         try {
-          await ctx.editMessageText(purchaseText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+          msg = await ctx.editMessageText(purchaseText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
         } catch (err) {
           if (!err.message || !err.message.includes('is not modified')) {
-            try { await ctx.reply(purchaseText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) }); } catch (e) { }
+            try { msg = await ctx.reply(purchaseText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) }); } catch (e) { }
           }
+        }
+        if (msg && msg.message_id) {
+          await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
         }
         return;
       }
@@ -1729,17 +1828,21 @@ function setupBotHandlers(bot) {
       const allowedList = completedList.slice(0, limit);
 
       if (allowedList.length === 0) {
-        const emptyText = `🌸 **Yangi Anime Subtitrlari (SubsPlease)**\n\nHozirda tayyor (Toliq yuklangan) yangi epizodlar mavjud emas. Iltimos, tizim yangi anime yuklab, o'zbekchalashtirishini kuting!\n\n_🕒 So'nggi yangilanish: ${new Date().toLocaleTimeString('uz-UZ')}_`;
+        const emptyText = `🌸 *Yangi Anime Subtitrlari (SubsPlease)*\n\nHozirda tayyor (Toliq yuklangan) yangi epizodlar mavjud emas. Iltimos, tizim yangi anime yuklab, o'zbekchalashtirishini kuting!\n\n_🕒 So'nggi yangilanish: ${new Date().toLocaleTimeString('uz-UZ')}_`;
         const emptyButtons = [
           [Markup.button.callback("🔄 Yangilash", `action_new_subtitles_page_${pageIndex}`)],
           [Markup.button.callback("⬅️ Orqaga", "back_to_menu")]
         ];
+        let msg;
         try {
-          await ctx.editMessageText(emptyText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(emptyButtons) });
+          msg = await ctx.editMessageText(emptyText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(emptyButtons) });
         } catch (err) {
           if (!err.message || !err.message.includes('is not modified')) {
-            try { await ctx.reply(emptyText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(emptyButtons) }); } catch (e) { }
+            try { msg = await ctx.reply(emptyText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(emptyButtons) }); } catch (e) { }
           }
+        }
+        if (msg && msg.message_id) {
+          await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
         }
         return;
       }
@@ -1776,20 +1879,24 @@ function setupBotHandlers(bot) {
         Markup.button.callback("⬅️ Orqaga", "back_to_menu")
       ]);
 
+      let msg;
       try {
-        await ctx.editMessageText(header, {
+        msg = await ctx.editMessageText(header, {
           parse_mode: 'Markdown',
           ...Markup.inlineKeyboard(buttons)
         });
       } catch (err) {
         if (!err.message || !err.message.includes('is not modified')) {
           try {
-            await ctx.reply(header, {
+            msg = await ctx.reply(header, {
               parse_mode: 'Markdown',
               ...Markup.inlineKeyboard(buttons)
             });
           } catch (e) { }
         }
+      }
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
       }
     } catch (e) {
       console.error(e);
@@ -1950,7 +2057,7 @@ function setupBotHandlers(bot) {
       const team = await db.getTeam(user.teamId);
       if (!team) return;
 
-      let msgText = `👥 **${team.name}** Jamoasi A'zolari:\n\n`;
+      let msgText = `👥 *${team.name}* Jamoasi A'zolari:\n\n`;
       const buttons = [];
 
       for (const memberId of team.members) {
@@ -1958,9 +2065,9 @@ function setupBotHandlers(bot) {
         const nameLabel = mUser.username ? `@${mUser.username}` : `Foydalanuvchi #${mUser.id}`;
 
         if (memberId === team.ownerId) {
-          msgText += `👑 **Administrator:** ${nameLabel}\n`;
+          msgText += `👑 *Administrator:* ${nameLabel}\n`;
         } else {
-          msgText += `• **A'zo:** ${nameLabel}\n`;
+          msgText += `• *A'zo:* ${nameLabel}\n`;
           if (user.id === team.ownerId) {
             // Owner can manage other users
             buttons.push([
@@ -1974,11 +2081,11 @@ function setupBotHandlers(bot) {
       // Add invite line
       const botInfo = await ctx.telegram.getMe();
       const inviteUrl = `https://t.me/${botInfo.username}?start=invite_${team.id}`;
-      msgText += `\n🔗 **Taklif Havolasi:** \`${inviteUrl}\` (Boshqalarni qo'shish uchun shu havolani jo'nating)`;
+      msgText += `\n🔗 *Taklif Havolasi:* \`${inviteUrl}\` (Boshqalarni qo'shish uchun shu havolani jo'nating)`;
 
       buttons.push([Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]);
 
-      await ctx.editMessageText(msgText, Markup.inlineKeyboard(buttons));
+      await ctx.editMessageText(msgText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
     } catch (e) {
       console.error(e);
     }
@@ -2032,7 +2139,7 @@ function setupBotHandlers(bot) {
       const loc = getLocaleByCtx(ctx);
       const settings = await db.getSettings();
 
-      const balanceText = `Hozirgi Balans: **${team.tokens}** Token.\n\nHar 1 qator subtitr tarjimasi uchun 1 token ishlatiladi. Agar tarjima paytida tizimda uzilish bo'lsa, qolgan tokenlaringiz avtomatik tarzda qaytariladi.\n\nXarid turini tanlang:`;
+      const balanceText = `Hozirgi Balans: *${team.tokens}* Token.\n\nHar 1 qator subtitr tarjimasi uchun 1 token ishlatiladi. Agar tarjima paytida tizimda uzilish bo'lsa, qolgan tokenlaringiz avtomatik tarzda qaytariladi.\n\nXarid turini tanlang:`;
 
       const buttons = [
         [Markup.button.callback("🪙 Token xarid qilish", 'category_tokens')],
@@ -2040,7 +2147,10 @@ function setupBotHandlers(bot) {
         [Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]
       ];
 
-      await ctx.editMessageText(balanceText, Markup.inlineKeyboard(buttons));
+      const msg = await ctx.editMessageText(balanceText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -2058,7 +2168,10 @@ function setupBotHandlers(bot) {
       }
       buttons.push([Markup.button.callback("⬅️ Orqaga", 'action_team_balance')]);
 
-      await ctx.editMessageText("🪙 **Token Paketlari**\n\nHisobingizni to'ldirish uchun kerakli token miqdorini tanlang:", Markup.inlineKeyboard(buttons));
+      const msg = await ctx.editMessageText("🪙 *Token Paketlari*\n\nHisobingizni to'ldirish uchun kerakli token miqdorini tanlang:", { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -2076,7 +2189,10 @@ function setupBotHandlers(bot) {
       }
       buttons.push([Markup.button.callback("⬅️ Orqaga", 'action_team_balance')]);
 
-      await ctx.editMessageText("📦 **Obuna Paketlari**\n\nJamoangiz uchun mos obuna tarifini tanlang (Yangi qismlarni avtomatik ochish uchun):", Markup.inlineKeyboard(buttons));
+      const msg = await ctx.editMessageText("📦 *Obuna Paketlari*\n\nJamoangiz uchun mos obuna tarifini tanlang (Yangi qismlarni avtomatik ochish uchun):", { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -2092,7 +2208,7 @@ function setupBotHandlers(bot) {
       if (!currentPack) return;
 
       const loc = getLocaleByCtx(ctx);
-      const instr = (loc.payment_instr || "To'lov Ma'lumotlari:\n\n💵 Narxi: **{price}**\n💳 Karta raqami: `{card_number}`\n👤 Karta egasi: **{card_owner}**\n\nTo'lovni amalga oshirganingizdan so'ng, tasdiqlovchi chek (screenshot) rasmini bu yerga yuboring.")
+      const instr = (loc.payment_instr || "To'lov Ma'lumotlari:\n\n💵 Narxi: *{price}*\n💳 Karta raqami: `{card_number}`\n👤 Karta egasi: *{card_owner}*\n\nTo'lovni amalga oshirganingizdan so'ng, tasdiqlovchi chek (screenshot) rasmini bu yerga yuboring.")
         .replace('{price}', currentPack.price)
         .replace('{card_number}', settings.cardNumber || "8600 0000 0000 0000")
         .replace('{card_owner}', settings.cardOwner || 'Admin');
@@ -2102,9 +2218,12 @@ function setupBotHandlers(bot) {
         pendingPurchase: currentPack
       });
 
-      await ctx.editMessageText(instr, Markup.inlineKeyboard([
+      const msg = await ctx.editMessageText(instr, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
         [Markup.button.callback("⬅️ Bekor qilish / Cancel", 'cancel_purchase')]
-      ]));
+      ]) });
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -2127,10 +2246,13 @@ function setupBotHandlers(bot) {
       const loc = getLocaleByCtx(ctx);
       const user = await db.getUser(ctx.from.id);
       const text = `${loc.settings_title}\n\n${loc.quality_prompt_label} ${user.settings.qualityPrompt || 'N/A'}\n${loc.batch_size_label} ${user.settings.batchSize}`;
-      await ctx.reply(text, Markup.inlineKeyboard([
+      const msg = await ctx.reply(text, Markup.inlineKeyboard([
         [Markup.button.callback(loc.change_quality, 'set_quality')],
         [Markup.button.callback(loc.change_batch, 'set_batch')]
       ]));
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+      }
     } catch (err) {
       console.error(err);
     }
@@ -2398,28 +2520,6 @@ function setupBotHandlers(bot) {
       const user = await db.getUser(userId);
       const loc = getLocaleByCtx(ctx);
 
-
-      if (user.state === 'AWAITING_PROMO') {
-        const promoCode = ctx.message.text.trim();
-        const result = await db.usePromocode(promoCode, user.teamId);
-        if (result.success) {
-          const promo = result.promo;
-          let text = "✅ Promokod muvaffaqiyatli ishlatildi!\n\n";
-          if (promo.type === 'package' || promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
-            text += 'Sizning jamoangiz obunasi faollashtirildi.';
-          } else {
-            text += 'Jamoangiz hisobiga ' + promo.value + " token qo'shildi.";
-          }
-          await ctx.reply(text);
-          logEvent('SUCCESS', 'Jamoa (' + user.teamId + ') promo ishlatdi: ' + promoCode);
-        } else {
-          await ctx.reply("❌ Xatolik: " + result.error);
-        }
-        await db.updateUser(userId, { state: 'IDLE' });
-        await sendTeamMenu(ctx, await db.getUser(userId));
-        return;
-      }
-
       if (ctx.message.photo && user.state === 'UPLOAD_SCREENSHOT' && user.pendingPurchase) {
         const photo = ctx.message.photo.pop();
         const pack = user.pendingPurchase;
@@ -2450,6 +2550,27 @@ function setupBotHandlers(bot) {
       const loc = getLocaleByCtx(ctx);
       const userId = ctx.from.id;
       const user = await db.getUser(userId);
+
+      if (user.state === 'AWAITING_PROMO') {
+        const promoCode = ctx.message.text.trim();
+        const result = await db.usePromocode(promoCode, user.teamId);
+        if (result.success) {
+          const promo = result.promo;
+          let text = "✅ Promokod muvaffaqiyatli ishlatildi!\n\n";
+          if (promo.type === 'package' || promo.type.startsWith('monthly_') || promo.type === 'unlimited') {
+            text += 'Sizning jamoangiz obunasi faollashtirildi.';
+          } else {
+            text += 'Jamoangiz hisobiga ' + promo.value + " token qo'shildi.";
+          }
+          await ctx.reply(text, { parse_mode: 'Markdown' });
+          logEvent('SUCCESS', 'Jamoa (' + user.teamId + ') promo ishlatdi: ' + promoCode);
+        } else {
+          await ctx.reply("❌ Xatolik: " + result.error);
+        }
+        await db.updateUser(userId, { state: 'IDLE' });
+        await sendTeamMenu(ctx, await db.getUser(userId));
+        return;
+      }
 
       if (user.state === 'ENTER_TEAM_NAME') {
         user.state = 'ENTER_TEAM_CHANNEL';
