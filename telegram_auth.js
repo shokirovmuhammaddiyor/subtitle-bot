@@ -108,16 +108,26 @@ export async function startQrLogin(apiId, apiHash) {
         qrSession.qrUrl = `tg://login?token=${tokenStr}`;
         qrSession.status = 'SCANNING';
       },
+      password: async (hint) => {
+        qrSession.status = 'NEEDS_2FA';
+        qrSession.passwordHint = hint;
+        return new Promise((resolve, reject) => {
+          qrSession.resolvePassword = resolve;
+          qrSession.rejectPassword = reject;
+          qrSession.passwordTimeout = setTimeout(() => {
+            if (qrSession.status === 'NEEDS_2FA') {
+              qrSession.status = 'ERROR';
+              qrSession.error = '2FA parolini kiritish vaqti tugadi';
+              reject(new Error('2FA_TIMEOUT'));
+            }
+          }, 5 * 60 * 1000);
+        });
+      },
       onError: async (err) => {
         const errMsg = err.message || String(err);
-        const is2fa = errMsg.includes("SESSION_PASSWORD_NEEDED") || (err.errorMessage && err.errorMessage.includes("SESSION_PASSWORD_NEEDED"));
-        if (is2fa) {
-          qrSession.status = 'NEEDS_2FA';
-        } else {
-          qrSession.status = 'ERROR';
-          qrSession.error = errMsg;
-          try { await client.disconnect(); } catch (e) {}
-        }
+        qrSession.status = 'ERROR';
+        qrSession.error = errMsg;
+        try { await client.disconnect(); } catch (e) {}
         return true;
       }
     }
@@ -128,26 +138,15 @@ export async function startQrLogin(apiId, apiHash) {
       qrSession.sessionString = client.session.save();
       qrSession.status = 'CONNECTED';
     } catch (e) {
-      const errMsg = e.message || String(e);
-      const is2fa = errMsg.includes("SESSION_PASSWORD_NEEDED") || (e.errorMessage && e.errorMessage.includes("SESSION_PASSWORD_NEEDED"));
-      if (is2fa) {
-        qrSession.status = 'NEEDS_2FA';
-      } else {
-        qrSession.status = 'ERROR';
-        qrSession.error = errMsg;
-        try { await client.disconnect(); } catch (_) {}
-      }
+      qrSession.status = 'ERROR';
+      qrSession.error = e.message;
+      try { await client.disconnect(); } catch (_) {}
     }
   }).catch(async (err) => {
-    const errMsg = err.message || String(err);
-    const is2fa = errMsg.includes("SESSION_PASSWORD_NEEDED") || (err.errorMessage && err.errorMessage.includes("SESSION_PASSWORD_NEEDED"));
-    if (is2fa) {
-      qrSession.status = 'NEEDS_2FA';
-    } else {
-      qrSession.status = 'ERROR';
-      qrSession.error = errMsg;
-      try { await client.disconnect(); } catch (e) {}
-    }
+    if (err.message === '2FA_TIMEOUT') return;
+    qrSession.status = 'ERROR';
+    qrSession.error = err.message || String(err);
+    try { client.disconnect(); } catch (e) {}
   });
 
   return sessionId;
@@ -170,34 +169,30 @@ export async function getQrStatus(sessionId) {
 export async function verifyQr2fa(sessionId, password) {
   const qrSession = qrSessions.get(sessionId);
   if (!qrSession) throw new Error("QR ulanish seansi topilmadi.");
-  const { client } = qrSession;
-  if (!client) throw new Error("Telegram client topilmadi.");
-
-  const { computeCheck } = await import("telegram/Password.js");
-
-  try {
-    const passwordData = await client.invoke(new Api.account.GetPassword());
-
-    await client.invoke(
-      new Api.auth.CheckPassword({
-        password: await computeCheck(passwordData, password),
-      })
-    );
-    const me = await client.getMe();
-    qrSession.phone = me.phone ? `+${me.phone}` : (me.username ? `@${me.username}` : 'Connected');
-    qrSession.sessionString = client.session.save();
-    qrSession.status = 'CONNECTED';
-    return { sessionString: qrSession.sessionString, phone: qrSession.phone };
-  } catch (err) {
-    if (err.message.includes("PASSWORD_HASH_INVALID") || (err.errorMessage && err.errorMessage.includes("PASSWORD_HASH_INVALID"))) {
-      throw new Error("PASSWORD_HASH_INVALID");
-    }
-    try { await client.disconnect(); } catch (e) {}
-    qrSession.status = 'ERROR';
-    qrSession.error = err.message || String(err);
-    qrSessions.delete(sessionId);
-    throw err;
+  
+  if (!qrSession.resolvePassword) {
+    throw new Error("Ushbu seans 2FA parol kiritish holatida emas.");
   }
+
+  if (qrSession.passwordTimeout) {
+    clearTimeout(qrSession.passwordTimeout);
+  }
+
+  // Resolve the pending promise in the password callback
+  qrSession.resolvePassword(password);
+
+  // Wait for the background signInUserWithQrCode process to complete
+  return new Promise((resolve, reject) => {
+    const checkInterval = setInterval(() => {
+      if (qrSession.status === 'CONNECTED') {
+        clearInterval(checkInterval);
+        resolve({ sessionString: qrSession.sessionString, phone: qrSession.phone });
+      } else if (qrSession.status === 'ERROR') {
+        clearInterval(checkInterval);
+        reject(new Error(qrSession.error || "2FA paroli xato."));
+      }
+    }, 500);
+  });
 }
 
 export async function cancelQrLogin(sessionId) {
