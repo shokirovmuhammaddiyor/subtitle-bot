@@ -1127,7 +1127,7 @@ export default function App() {
       if (isAuthenticated === true) {
         fetchApiHealth();
       }
-    }, 60000);
+    }, 30 * 60 * 1000); // 30 minutes
 
     return () => {
       clearInterval(interval);
@@ -1547,7 +1547,7 @@ export default function App() {
   }
 
   return (
-    <div id="subtrans-dashboard" className="w-full min-h-screen bg-slate-950 text-slate-300 font-sans flex flex-col overflow-hidden select-none">
+    <div id="subtrans-dashboard" className="w-full min-h-screen bg-slate-950 text-slate-300 font-sans flex flex-col overflow-hidden select-text">
       <header className="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-6 shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-sky-500 rounded flex items-center justify-center text-slate-900">
@@ -3699,7 +3699,7 @@ export default function App() {
             </div>
           </div>
 
-          <section id="system-runtime-logs" className="bg-slate-900/50 border-t border-slate-800 p-4 flex-1 min-h-[160px] flex flex-col shrink-0">
+          <section id="system-runtime-logs" className="bg-slate-900/50 border-t border-slate-800 p-4 flex-1 min-h-[300px] flex flex-col shrink-0">
             <div className="pb-2 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2 shrink-0">
                 <span className="text-[10px] font-bold uppercase text-slate-400 font-mono flex items-center gap-1.5">
@@ -3742,7 +3742,7 @@ export default function App() {
                 <span className="text-[10px] text-slate-600 font-mono hidden md:inline">Session ID: d3f2-88a1-c901</span>
               </div>
             </div>
-            <div className="flex-1 py-3 font-mono text-[11px] overflow-y-auto space-y-1.5 text-slate-400 max-h-[120px]">
+            <div className="flex-1 py-3 font-mono text-[11px] overflow-y-auto space-y-1.5 text-slate-400 max-h-[350px] min-h-[220px] select-text">
               {(logs || [])
                 .filter((log: any) => {
                   const matchesSearch = !logsSearch.trim() ||

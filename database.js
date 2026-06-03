@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 export class Database {
   constructor(filePath = 'db.json') {
     this.filePath = filePath;
+    this.saveQueue = Promise.resolve();
     this.data = {
       users: [],
       projects: [],
@@ -113,7 +114,14 @@ Quyidagi qoidalarga qat'iy amal qil:
   }
 
   async save() {
-    await fs.writeFile(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
+    this.saveQueue = this.saveQueue.then(async () => {
+      try {
+        await fs.writeFile(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
+      } catch (err) {
+        console.error('[DB WRITE ERROR] Failed to save database:', err);
+      }
+    });
+    return this.saveQueue;
   }
 
   async getSettings() {

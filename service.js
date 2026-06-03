@@ -336,6 +336,7 @@ export async function translateSubtitles({
     let chunkSuccess = false;
     let chunkAttempts = 0;
     const maxChunkAttempts = 20;
+    let lastError = null;
 
     while (!chunkSuccess && chunkAttempts < maxChunkAttempts) {
       let keyInfo;
@@ -411,6 +412,7 @@ export async function translateSubtitles({
 
         chunkSuccess = true;
       } catch (err) {
+        lastError = err;
         const errMsg = err.message || '';
         logger('WARNING', `[GEMINI API WARNING] Key failure (attempt ${chunkAttempts}): ${errMsg.substring(0, 150)}`);
 
@@ -462,8 +464,8 @@ export async function translateSubtitles({
     }
 
     if (!chunkSuccess) {
-      logger('ERROR', `Translation failed for chunk after ${chunkAttempts} attempts.`);
-      throw new Error(`TRANSLATION_FAILED: Tarjima serveri band yoki barcha kalit limitlari tugadi. (${chunkAttempts} urinishdan so'ng)`);
+      logger('ERROR', `Translation failed for chunk after ${chunkAttempts} attempts. Last error: ${lastError ? lastError.message || lastError : 'Unknown'}`);
+      throw new Error(`TRANSLATION_FAILED: Tarjima serveri band yoki barcha kalit limitlari tugadi. (Oxirgi xato: ${lastError ? lastError.message || lastError : 'Unknown'})`);
     }
 
     translatedCount += chunk.length;

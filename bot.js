@@ -3493,7 +3493,7 @@ async function uploadFileToChannel(filename, content, type) {
   return { fileId, link };
 }
 
-setInterval(runAutomatedAnimeWorker, 12000);
+setInterval(runAutomatedAnimeWorker, 15 * 60 * 1000);
 
 if (process.env.BOT_TOKEN) {
   restartBot(process.env.BOT_TOKEN);
