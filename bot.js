@@ -22,6 +22,18 @@ function logEvent(type, message) {
   if (systemLogs.length > 50) systemLogs.pop();
 }
 
+async function fetchSubsPlease(endpoint) {
+  const url = endpoint.startsWith('http') ? endpoint : `https://subsplease.org${endpoint}`;
+  return fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36',
+      'Referer': 'https://subsplease.org/',
+      'Accept': 'application/json, text/javascript, */*; q=0.01',
+      'X-Requested-With': 'XMLHttpRequest'
+    }
+  });
+}
+
 let cachedLocales = {};
 
 if (db && db.data) {
@@ -1382,6 +1394,20 @@ app.get('/api/admin/automated-animes'
       res.status(500).json({ error: err.message });
     }
   });
+
+app.get('/api/subsplease', async (req, res) => {
+  try {
+    const queryString = new URL(req.url, 'http://localhost').search;
+    const response = await fetchSubsPlease(`/api/${queryString}`);
+    if (!response.ok) {
+      return res.status(response.status).send(await response.text());
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 if (process.env.NODE_ENV !== 'production') {
   const { createServer: createViteServer } = await import('vite');
@@ -3274,7 +3300,7 @@ async function runAutomatedAnimeWorker() {
     if (settings.auto_download_enabled) {
       logEvent('INFO', '[Worker] Checking for new anime releases...');
       try {
-        const response = await fetch('https://animecontent.io/api/?f=latest&tz=Asia/Tashkent');
+        const response = await fetchSubsPlease('/api/?f=schedule&h=true&tz=Asia/Tashkent');
         if (response.ok) {
           const resJson = await response.json();
           const schedule = resJson.schedule || [];
