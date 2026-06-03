@@ -36,11 +36,16 @@ export async function verifyCode(phone, code) {
       })
     );
     const sessionString = client.session.save();
+    clients.delete(phone); // cleanup: xotira sizishini oldini olish
     return { sessionString, needs2fa: false };
   } catch (err) {
     if (err.message.includes("SESSION_PASSWORD_NEEDED") || (err.errorMessage && err.errorMessage.includes("SESSION_PASSWORD_NEEDED"))) {
+      // 2FA kerak — clientni saqlab qolamiz verify2fa uchun
       return { needs2fa: true };
     }
+    // Boshqa xatolar uchun clientni tozalab disconnect qilamiz
+    try { await client.disconnect(); } catch (e) {}
+    clients.delete(phone);
     throw err;
   }
 }
@@ -52,15 +57,22 @@ export async function verify2fa(phone, password) {
 
   const { computeCheck } = await import("telegram/Password.js");
 
-  const passwordData = await client.invoke(new Api.account.GetPassword());
+  try {
+    const passwordData = await client.invoke(new Api.account.GetPassword());
 
-  await client.invoke(
-    new Api.auth.CheckPassword({
-      password: await computeCheck(passwordData, password),
-    })
-  );
-  const sessionString = client.session.save();
-  return { sessionString };
+    await client.invoke(
+      new Api.auth.CheckPassword({
+        password: await computeCheck(passwordData, password),
+      })
+    );
+    const sessionString = client.session.save();
+    clients.delete(phone); // cleanup: muvaffaqiyatli ulanishdan keyin xotirani tozalash
+    return { sessionString };
+  } catch (err) {
+    try { await client.disconnect(); } catch (e) {}
+    clients.delete(phone);
+    throw err;
+  }
 }
 
 export const qrSessions = new Map();
@@ -106,12 +118,13 @@ export async function startQrLogin(apiId, apiHash) {
   ).then(async (user) => {
     try {
       const me = await client.getMe();
-      qrSession.phone = me.phone || me.username || 'Connected';
+      qrSession.phone = me.phone ? `+${me.phone}` : (me.username ? `@${me.username}` : 'Connected');
       qrSession.sessionString = client.session.save();
       qrSession.status = 'CONNECTED';
     } catch (e) {
       qrSession.status = 'ERROR';
       qrSession.error = e.message;
+      try { await client.disconnect(); } catch (_) {}
     }
   }).catch((err) => {
     qrSession.status = 'ERROR';

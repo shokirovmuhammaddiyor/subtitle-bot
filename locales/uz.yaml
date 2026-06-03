@@ -56,5 +56,5 @@ payment_instr: "To'lov Ma'lumotlari:\n\n💵 Narxi: *{price}*\n💳 Karta raqami
 payment_submitted: "Screenshot to'lov uchun tizimga yuborildi! Admin tasdiqlashi bilan tokenlaringiz hisoblanadi."
 concurrency_limit: "Sizning jamoangiz uchun parallel ishlayotgan tarjima jarayoni mavjud. Siz navbatga qo'yildingiz. Bo'sh slot paydo bo'lishi bilan tarjima davom etadi!"
 next_episode_prompt: "Tarjima yakunlandi. Navbatdagi epizod(qism)ni qoshmoqchimisiz?"
-btn_next_episode: "🎬 Keyingi qismni tarjiima qilish"
+btn_next_episode: "🎬 Keyingi qismni tarjima qilish"
 btn_back_projects: "📁 Loyihalar bo'limi"

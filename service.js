@@ -191,7 +191,7 @@ export async function translateSubtitles({
       const ai = getAi(currentKey);
       try {
         const response = await ai.models.generateContent({
-          model: 'gemini-3.5-flash',
+          model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
           contents: userPrompt,
           config: {
             systemInstruction: combinedSystemInstruction,
@@ -222,40 +222,47 @@ export async function translateSubtitles({
       } catch (err) {
         attempts++;
         const errMsg = err.message || '';
-        console.warn(`[GEMINI API WARNING] Active key index #${activeKeyIndex} failed: ${errMsg}`);
-        
-        let backoff = 5000; // default exactly 5 seconds wait for any potential rate-limiting as requested by the user
-        
+        console.warn(`[GEMINI API WARNING] Key #${activeKeyIndex} failed (attempt ${attempts}): ${errMsg.substring(0, 150)}`);
+
+        // 429 / quota xatosi: retryDelay parse qilib shu vaqt kutish
+        let backoff = 6000;
+        const is429 = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota');
+        if (is429) {
+          const retryMatch = errMsg.match(/"retryDelay"\s*:\s*"(\d+)s"/) || errMsg.match(/retry in (\d+(?:\.\d+)?)s/i);
+          if (retryMatch) {
+            const retrySeconds = Math.ceil(parseFloat(retryMatch[1]));
+            backoff = Math.min(retrySeconds * 1000 + 1000, 65000);
+          } else {
+            backoff = 20000;
+          }
+        }
+
+        // Alternativ kalit bo'lsa darhol almashtirib ko'rish
         if (keys.length > 1) {
           activeKeyIndex = (activeKeyIndex + 1) % keys.length;
-          console.warn(`[FAILOVER ACTIVATED] Switched to alternative key index #${activeKeyIndex}`);
-          
+          console.warn(`[FAILOVER] Switching to key #${activeKeyIndex + 1}`);
           await onProgress({
             total,
             translated: translatedCount,
-            eta: `API xatosi. Zaxira kalitga o'tilmoqda (#${activeKeyIndex + 1}). Muvaffaqiyatsiz urinish: ${attempts}...`,
-            progressBar: `[${'█'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
+            eta: `Tarjima davom etmoqda...`,
+            progressBar: `[${'\u2588'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
           });
-          
-          // If we have alternative keys, try switching immediately
           if (attempts < keys.length) {
             continue;
           }
         }
 
         if (attempts >= 12) {
-          throw new Error(`Gemini API limit/UNAVAILABLE: Barcha muqobil kalitlar va urinishlar yakunlandi. Oxirgi xato: ${err.message}`);
+          throw new Error(`TRANSLATION_FAILED: Tarjima serveri band yoki kalit chekovi tugadi. (${attempts} urinish)`);
         }
-        
-        console.warn(`Retrying in ${backoff}ms...`);
-        
+
+        console.warn(`[RETRY] Waiting ${backoff}ms...`);
         await onProgress({
           total,
           translated: translatedCount,
-          eta: `API cheklovi. ${Math.round(backoff / 1000)}s kutilmoqda (Urinish ${attempts}/12)...`,
-          progressBar: `[${'█'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
+          eta: `Tarjima davom etmoqda... (${Math.round(backoff / 1000)}s)`,
+          progressBar: `[${'\u2588'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
         });
-        
         await new Promise(resolve => setTimeout(resolve, backoff));
       }
     }

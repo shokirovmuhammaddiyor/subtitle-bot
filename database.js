@@ -12,7 +12,8 @@ export class Database {
       ratings: [],
       settings: null,
       automatedAnimes: [],
-      promocodes: []
+      promocodes: [],
+      backups: []
     };
   }
 
@@ -30,12 +31,14 @@ export class Database {
         ratings: parsed.ratings || [],
         settings: parsed.settings || null,
         automatedAnimes: parsed.automatedAnimes || [],
-        promocodes: parsed.promocodes || []
+        promocodes: parsed.promocodes || [],
+        backups: parsed.backups || []
       };
 
       if (!this.data.settings) {
         this.data.settings = {
           defaultBatchSize: 45,
+          aiModel: 'gemini-2.0-flash',
           systemPrompt: `Sen professional subtitr tarjimoni va o'zbek tiliga mahalliylashtirish mutaxassisisan. Vazifang berilgan matnlarni yuqori sifatli, tabiiy va dublyajbop o'zbek tiliga tarjima qilish.
 
 Hozirgi loyiha nomi: {movie_name}
@@ -96,7 +99,7 @@ Quyidagi qoidalarga qat'iy amal qil:
         cardOwner: "Sherzodbek To'xtasinov",
         packages: [
           { id: 'pack_1000', name: "1,000 dona Token", type: 'tokens', value: 1000, price: "15,000 O'zS" },
-          { id: 'pack_5000', name: "5,050 dona Token", type: 'tokens', value: 5000, price: "60,000 O'zS" },
+          { id: 'pack_5000', name: "5,000 dona Token", type: 'tokens', value: 5000, price: "60,000 O'zS" },
           { id: 'pack_15000', name: "15,000 dona Token", type: 'tokens', value: 15000, price: "150,000 O'zS" },
           { id: 'monthly_starter', name: "Boshlang'ich (Oxirgi 10 ta Subtitle)", type: 'monthly_starter', value: 10, price: "50,000 O'zS" },
           { id: 'monthly_fandub', name: "FanDub (Oxirgi 25 ta Subtitle)", type: 'monthly_fandub', value: 25, price: "120,000 O'zS" },
@@ -300,7 +303,7 @@ Quyidagi qoidalarga qat'iy amal qil:
     return this.data.payments;
   }
 
-  async createPayment(userId, teamId, amount, screenshot, type, value, packageName = '') {
+  async createPayment(userId, teamId, amount, screenshot, type, value, packageName = '', days = null, packageId = null) {
     const payment = {
       id: Date.now().toString(),
       userId: Number(userId),
@@ -310,6 +313,8 @@ Quyidagi qoidalarga qat'iy amal qil:
       type, // 'tokens' or 'unlimited'
       value: Number(value),
       packageName,
+      days: days ? Number(days) : null,
+      packageId: packageId || null,
       status: 'PENDING',
       createdAt: new Date().toISOString()
     };
@@ -326,8 +331,12 @@ Quyidagi qoidalarga qat'iy amal qil:
       if (team) {
         if (payment.type === 'package' || payment.type.startsWith('monthly_') || payment.type === 'unlimited') {
           team.activeSubscription = payment.packageId || payment.type;
-          if (payment.days) {
-            team.subscriptionExpiresAt = new Date(Date.now() + payment.days * 24 * 3600 * 1000).toISOString();
+          let subDays = payment.days;
+          if (!subDays && payment.type.startsWith('monthly_')) {
+            subDays = 30; // default to 30 days for monthly packages
+          }
+          if (subDays) {
+            team.subscriptionExpiresAt = new Date(Date.now() + subDays * 24 * 3600 * 1000).toISOString();
           } else {
             team.subscriptionExpiresAt = null; // Cheksiz muddat
           }

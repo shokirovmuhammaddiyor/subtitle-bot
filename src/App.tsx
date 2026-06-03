@@ -3,7 +3,7 @@ import {
   Terminal, Cpu, Database as DbIcon,
   Settings, AlertCircle, RefreshCw, Send, CheckCircle2,
   Layers, Zap, Clock, Code, Activity, Globe, Server, Download, Upload, Shield, Save,
-  Trash2, Plus, Users, CreditCard, Check, X, Eye, ShieldAlert, Lock, LogOut
+  Trash2, Plus, Users, CreditCard, Check, X, Eye, ShieldAlert, Lock, LogOut, FileText
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -89,7 +89,20 @@ export default function App() {
   const [adminSessions, setAdminSessions] = useState<any[]>([]);
   const [adminSessionsLoading, setAdminSessionsLoading] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'config' | 'teams' | 'payments' | 'yaml' | 'stats' | 'admin_users' | 'backups'>('config');
+  const [activeTab, setActiveTab] = useState<'config' | 'teams' | 'payments' | 'yaml' | 'stats' | 'admin_users' | 'backups' | 'subtitles'>('config');
+
+  // Mandatory Channels States
+  const [mandatoryChannels, setMandatoryChannels] = useState<any[]>([]);
+  const [mandatoryChannelsLoading, setMandatoryChannelsLoading] = useState(false);
+  const [newChanId, setNewChanId] = useState('');
+  const [newChanInvite, setNewChanInvite] = useState('');
+  const [newChanTitle, setNewChanTitle] = useState('');
+
+  // Subtitles States
+  const [subtitles, setSubtitles] = useState<any[]>([]);
+  const [subtitlesLoading, setSubtitlesLoading] = useState(false);
+  const [subtitlesError, setSubtitlesError] = useState('');
+  const [subtitlesDownloadingId, setSubtitlesDownloadingId] = useState<string | null>(null);
 
   const [users, setUsers] = useState<any[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -115,10 +128,12 @@ export default function App() {
       fetchConfig(),
       fetchLocales(),
       fetchTeams(),
-
+      fetchPayments(),
       fetchPromocodes(),
       fetchApiHealth(),
-      fetchSessionsList()
+      fetchSessionsList(),
+      fetchMandatoryChannels(),
+      fetchSubtitles()
     ]);
     setLoading(false);
   };
@@ -266,6 +281,66 @@ export default function App() {
     }
   };
 
+  const fetchMandatoryChannels = async () => {
+    try {
+      setMandatoryChannelsLoading(true);
+      const res = await fetch('/api/admin/mandatory-channels');
+      if (res.ok) {
+        const data = await res.json();
+        setMandatoryChannels(data);
+      }
+    } catch (e) { }
+    setMandatoryChannelsLoading(false);
+  };
+
+  const fetchSubtitles = async () => {
+    try {
+      setSubtitlesLoading(true);
+      const res = await fetch('/api/admin/subtitles');
+      if (res.ok) {
+        const data = await res.json();
+        setSubtitles(data);
+      }
+    } catch (e) { }
+    setSubtitlesLoading(false);
+  };
+
+  const handleAddChannel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newChanId || !newChanInvite || !newChanTitle) {
+      alert("Barcha maydonlarni to'ldiring");
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/mandatory-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: newChanId, inviteLink: newChanInvite, title: newChanTitle })
+      });
+      if (res.ok) {
+        setNewChanId('');
+        setNewChanInvite('');
+        setNewChanTitle('');
+        fetchMandatoryChannels();
+      } else {
+        const data = await res.json();
+        alert(data.error || "Kanal qo'shishda xatolik");
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleDeleteChannel = async (id: string) => {
+    if (!window.confirm("Haqiqatan ham ushbu kanalni majburiy obuna ro'yxatidan o'chirmoqchimisiz?")) return;
+    try {
+      const res = await fetch(`/api/admin/mandatory-channels/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchMandatoryChannels();
+      }
+    } catch (e) { }
+  };
+
   const handleCreateBackup = async () => {
     try {
       setBackupsLoading(true);
@@ -286,7 +361,7 @@ export default function App() {
     }
   };
 
-  const handleRestoreBackup = async (filename: string) => {
+  const handleRestoreBackup = async (id: string, filename: string) => {
     if (!window.confirm(`Haqiqatan ham tizim holatini "${filename}" zaxira nusxasiga qaytarmoqchimisiz?\nUshbu amal barcha joriy holatni o'zgartiradi (Lekin bundan oldin favqulodda zaxira nusxa yaratiladi).`)) {
       return;
     }
@@ -297,7 +372,7 @@ export default function App() {
       const res = await fetch('/api/admin/backups/restore', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename })
+        body: JSON.stringify({ id })
       });
       const data = await res.json();
       if (data.success) {
@@ -307,6 +382,8 @@ export default function App() {
         fetchPayments();
         fetchUsers();
         fetchBackups();
+        fetchConfig();
+        fetchTelegramStatus();
       } else {
         throw new Error(data.error || 'Nomalum xatolik');
       }
@@ -317,10 +394,10 @@ export default function App() {
     }
   };
 
-  const handleDownloadBackup = async (filename: string) => {
+  const handleDownloadBackup = async (id: string, filename: string) => {
     try {
       setBackupsError('');
-      const res = await fetch(`/api/admin/backups/download/${filename}`);
+      const res = await fetch(`/api/admin/backups/download/${id}`);
       if (!res.ok) throw new Error("Yuklab olishda xatolik yuz berdi");
 
       const blob = await res.blob();
@@ -334,6 +411,29 @@ export default function App() {
       document.body.removeChild(a);
     } catch (err: any) {
       setBackupsError(err.message);
+    }
+  };
+
+  const handleDownloadSubtitle = async (episodeId: string, fileType: 'original' | 'translated', filename: string) => {
+    try {
+      setSubtitlesError('');
+      setSubtitlesDownloadingId(`${episodeId}_${fileType}`);
+      const res = await fetch(`/api/admin/subtitles/download/${episodeId}/${fileType}`);
+      if (!res.ok) throw new Error("Yuklab olishda xatolik yuz berdi");
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      setSubtitlesError(err.message);
+    } finally {
+      setSubtitlesDownloadingId(null);
     }
   };
 
@@ -357,7 +457,10 @@ export default function App() {
           fetchBackups();
           fetchStats();
           fetchTeams();
+          fetchPayments();
           fetchUsers();
+          fetchConfig();
+          fetchTelegramStatus();
         } else {
           const d = await res.json();
           setBackupsError(d.error || "Xatolik yuz berdi");
@@ -507,6 +610,7 @@ export default function App() {
 
   const [botToken, setBotToken] = useState('');
   const [apiKeys, setApiKeys] = useState<string[]>(['']);
+  const [aiModel, setAiModel] = useState('gemini-2.0-flash');
   const [defaultBatchSize, setDefaultBatchSize] = useState('45');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [cardNumber, setCardNumber] = useState('');
@@ -778,6 +882,9 @@ export default function App() {
   const [teamsLoading, setTeamsLoading] = useState(false);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
 
+  const pendingTeamsCount = teams.filter((t: any) => t.status === 'PENDING').length;
+  const pendingPaymentsCount = payments.filter((p: any) => p.status === 'PENDING').length;
+
   // States to locally adjust and modify balance & limits during approvals
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
   const [editTokens, setEditTokens] = useState<number>(1000);
@@ -961,6 +1068,7 @@ export default function App() {
         setPackages(data.packages || []);
         setTelegramApiId(data.telegramApiId || '');
         setTelegramApiHash(data.telegramApiHash || '');
+        setAiModel(data.aiModel || 'gemini-2.0-flash');
       }
     } catch (e) { }
   };
@@ -1009,11 +1117,13 @@ export default function App() {
       fetchConfig();
       fetchTelegramStatus();
       fetchAutomatedAnimes();
+      fetchMandatoryChannels();
     }
     if (activeTab === 'yaml') fetchLocales();
     if (activeTab === 'teams') fetchTeams();
     if (activeTab === 'payments') fetchPayments();
     if (activeTab === 'backups') fetchBackups();
+    if (activeTab === 'subtitles') fetchSubtitles();
     if (activeTab === 'admin_users') {
       fetchUsers();
       fetchProjectsData();
@@ -1047,7 +1157,8 @@ export default function App() {
           cardOwner,
           packages,
           telegramApiId,
-          telegramApiHash
+          telegramApiHash,
+          aiModel
         })
       });
       if (res.ok) {
@@ -1532,6 +1643,12 @@ export default function App() {
                       }`}
                   >
                     <Users className="w-3 h-3" /> Teams ({teams.length})
+                    {pendingTeamsCount > 0 && (
+                      <span className="relative flex h-2 w-2 ml-1">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                      </span>
+                    )}
                   </button>
                   <button
                     onClick={() => setActiveTab('payments')}
@@ -1541,6 +1658,12 @@ export default function App() {
                       }`}
                   >
                     <CreditCard className="w-3 h-3" /> Receipts ({payments.length})
+                    {pendingPaymentsCount > 0 && (
+                      <span className="relative flex h-2 w-2 ml-1">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                      </span>
+                    )}
                   </button>
                   <button
                     onClick={() => setActiveTab('yaml')}
@@ -1577,6 +1700,15 @@ export default function App() {
                       }`}
                   >
                     <DbIcon className="w-3 h-3" /> Backups
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('subtitles')}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1 shrink-0 ${activeTab === 'subtitles'
+                      ? 'bg-sky-500 text-slate-950 font-bold'
+                      : 'bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800/50'
+                      }`}
+                  >
+                    <FileText className="w-3 h-3" /> Subtitles
                   </button>
                 </div>
               </div>
@@ -1709,15 +1841,31 @@ export default function App() {
                             Tizim kiritilgan barcha kalitlarni aylanma tartibda (Key Rotation) ishlashini ta'minlaydi. Har bir kalit alohida inputga yozilishi lozim.
                           </p>
                         </div>
-                        <div>
-                          <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Default Batch Size (Lines per Request)</label>
-                          <input
-                            type="number"
-                            className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                            value={defaultBatchSize}
-                            onChange={(e) => setDefaultBatchSize(e.target.value)}
-                            required
-                          />
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">AI Model</label>
+                            <select
+                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={aiModel}
+                              onChange={(e) => setAiModel(e.target.value)}
+                            >
+                              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                              <option value="gemini-2.5-flash-lite-preview-06-17">gemini-2.5-flash-lite</option>
+                              <option value="gemini-2.0-flash">gemini-2.0-flash (Default)</option>
+                              <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview</option>
+                              <option value="gemma-3-27b-it">gemma-3-27b-it</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Default Batch Size (Lines/Req)</label>
+                            <input
+                              type="number"
+                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={defaultBatchSize}
+                              onChange={(e) => setDefaultBatchSize(e.target.value)}
+                              required
+                            />
+                          </div>
                         </div>
                         <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-800">
                           <div>
@@ -1998,10 +2146,10 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* SubsPlease Automatic Downloader Configuration settings */}
+                    {/* Automatic Downloader Configuration settings */}
                     <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-4 text-left mt-4">
                       <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
-                        <Code className="w-3.5 h-3.5 text-sky-400" /> SubsPlease Avtomatik Yuklovchi Sozlamalari
+                        <Code className="w-3.5 h-3.5 text-sky-400" /> Avtomatik Yuklovchi Sozlamalari
                       </h3>
 
                       <div className="space-y-3.5">
@@ -2315,11 +2463,11 @@ export default function App() {
                     </div>
 
 
-                    {/* SubsPlease Pipeline Live Queue Status */}
+                    {/* Anime Pipeline Live Queue Status */}
                     <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-4 text-left mt-4 mb-4">
                       <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                         <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
-                          <Activity className="w-3.5 h-3.5 text-sky-400 animate-pulse" /> SubsPlease Live Tracker (So'nggi 25 tasi)
+                          <Activity className="w-3.5 h-3.5 text-sky-400 animate-pulse" /> Anime Navbat Holati (So'nggi 25 tasi)
                         </h3>
                         <button
                           onClick={fetchAutomatedAnimes}
@@ -2331,7 +2479,7 @@ export default function App() {
 
                       {!Array.isArray(automatedAnimes) || automatedAnimes.length === 0 ? (
                         <div className="py-8 text-center text-xs text-slate-500 font-mono">
-                          Hozircha navbatda faol loyihalar yo'q. SubsPlease yangi chiqishlarini kutmoqda.
+                          Hozircha navbatda faol loyihalar yo'q. Yangi animalar chiqishlarini kutmoqda.
                         </div>
                       ) : (
                         <div className="space-y-3 font-mono">
@@ -2378,6 +2526,96 @@ export default function App() {
                           ))}
                         </div>
                       )}
+                    </div>
+
+                    {/* MAJBURIY OBUNA (MANDATORY CHANNELS) SECTION */}
+                    <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-4 text-left mt-4">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+                        <Users className="w-3.5 h-3.5 text-sky-400" /> Majburiy Obuna Kanallari (Mandatory Channels)
+                      </h3>
+
+                      {mandatoryChannelsLoading && mandatoryChannels.length === 0 ? (
+                        <div className="py-4 text-center text-xs text-slate-500 font-mono">
+                          Kanallar ro'yxati yuklanmoqda...
+                        </div>
+                      ) : (
+                        <div className="space-y-2 mt-2">
+                          <span className="block text-[10px] uppercase font-bold text-slate-400 font-mono mb-2">Mavjud Kanallar ({mandatoryChannels.length})</span>
+                          {mandatoryChannels.length === 0 ? (
+                            <div className="p-3 text-center text-xs text-slate-500 bg-slate-950 border border-slate-800 rounded font-mono">
+                              Hozircha hech qanday kanal majburiy obunaga qo'shilmagan.
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                              {mandatoryChannels.map((chan: any) => (
+                                <div key={chan.id} className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex flex-col justify-between relative space-y-2 font-mono">
+                                  <div>
+                                    <div className="text-xs font-bold text-white flex justify-between items-center">
+                                      <span className="text-emerald-400 truncate max-w-[120px]" title={chan.title}>{chan.title}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteChannel(chan.id)}
+                                        className="text-rose-400 hover:text-rose-500 text-[10px] font-bold p-1 hover:bg-rose-500/10 rounded cursor-pointer transition-colors"
+                                      >
+                                        O'chirish
+                                      </button>
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 font-mono mt-1 space-y-1">
+                                      <div className="truncate">ID: <span className="text-sky-400 select-all">{chan.id}</span></div>
+                                      <div className="truncate">Havola: <a href={chan.inviteLink} target="_blank" rel="noopener noreferrer" className="text-amber-400 underline truncate max-w-[150px] inline-block align-bottom">{chan.inviteLink}</a></div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <form onSubmit={handleAddChannel} className="bg-slate-950 border border-slate-800 rounded-lg p-3.5 space-y-3">
+                        <span className="block text-[10px] uppercase font-bold text-slate-300 font-mono">➕ Yangi Kanal Qo'shish</span>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Kanal Nomi</label>
+                            <input
+                              type="text"
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              placeholder="Masalan: VoiPlayStudio"
+                              value={newChanTitle}
+                              onChange={(e) => setNewChanTitle(e.target.value)}
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Kanal ID (Channel ID)</label>
+                            <input
+                              type="text"
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              placeholder="Masalan: -100123456789"
+                              value={newChanId}
+                              onChange={(e) => setNewChanId(e.target.value)}
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[8px] uppercase font-bold text-slate-500 font-mono mb-1">Havola (Invite / Join request link)</label>
+                            <input
+                              type="text"
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              placeholder="Masalan: https://t.me/+AbCdEfGh"
+                              value={newChanInvite}
+                              onChange={(e) => setNewChanInvite(e.target.value)}
+                              required
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="submit"
+                          className="bg-sky-500 hover:bg-sky-600 text-slate-950 font-extrabold text-xs px-3.5 py-1.5 rounded uppercase tracking-wider transition-colors cursor-pointer"
+                        >
+                          Kanalni qo'shish
+                        </button>
+                      </form>
                     </div>
                   </div>
                 )}
@@ -3242,7 +3480,7 @@ export default function App() {
                             </thead>
                             <tbody className="divide-y divide-slate-800/40 text-[11px] font-mono text-slate-300">
                               {backups.map((bk, i) => {
-                                const isDaily = bk.filename.startsWith('db-backup-');
+                                const isDaily = !bk.filename.includes('_');
                                 return (
                                   <tr key={i} className="hover:bg-slate-900/40 transition-colors">
                                     <td className="py-2.5 text-white font-semibold flex items-center gap-2 truncate max-w-[200px]">
@@ -3259,17 +3497,17 @@ export default function App() {
                                       {new Date(bk.createdAt).toLocaleString()}
                                     </td>
                                     <td className="py-2.5 text-slate-400 font-sans">
-                                      {(bk.size / 1024).toFixed(2)} KB
+                                      {typeof bk.size === 'number' ? (bk.size / 1024).toFixed(2) + ' KB' : bk.size}
                                     </td>
                                     <td className="py-2.5 text-right">
                                       <button
-                                        onClick={() => handleDownloadBackup(bk.filename)}
+                                        onClick={() => handleDownloadBackup(bk.id || bk.filename, bk.filename)}
                                         className="bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/20 text-[10px] font-semibold px-3 py-1 rounded cursor-pointer transition-all duration-150 inline-block mr-2"
                                       >
                                         Yuklash
                                       </button>
                                       <button
-                                        onClick={() => handleRestoreBackup(bk.filename)}
+                                        onClick={() => handleRestoreBackup(bk.id || bk.filename, bk.filename)}
                                         className="bg-sky-500/10 hover:bg-sky-500 text-sky-400 hover:text-slate-950 border border-sky-500/20 text-[10px] font-semibold px-3 py-1 rounded cursor-pointer transition-all duration-150 inline-block"
                                       >
                                         Tiklash (Restore)
@@ -3278,6 +3516,113 @@ export default function App() {
                                   </tr>
                                 );
                               })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'subtitles' && (
+                  <div className="space-y-4 text-left font-sans">
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-3">
+                      <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                        <h3 className="text-xs font-bold uppercase text-slate-200 flex items-center gap-1.5 font-mono">
+                          <FileText className="w-3.5 h-3.5 text-sky-400" /> Tarjima Qilingan Subtitrlar
+                        </h3>
+                        <button
+                          onClick={fetchSubtitles}
+                          className="bg-slate-800/60 hover:bg-slate-800 text-slate-300 text-[10px] font-bold px-2 py-1 rounded border border-slate-700 flex items-center gap-1 cursor-pointer transition-all"
+                          disabled={subtitlesLoading}
+                        >
+                          <RefreshCw className={`w-2.5 h-2.5 ${subtitlesLoading ? 'animate-spin' : ''}`} />
+                          Yangilash
+                        </button>
+                      </div>
+
+                      <p className="text-[10px] text-slate-400 leading-relaxed font-mono">
+                        Ushbu bo'limda bot orqali tarjima qilingan barcha subtitrlar (originali va o'zbekchasi) ro'yxati keltirilgan. Fayllarni Telegram storage kanalidan to'g'ridan-to'g'ri yuklab olishingiz mumkin.
+                      </p>
+
+                      {subtitlesError && (
+                        <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>{subtitlesError}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-4">
+                      <h4 className="text-[11px] font-bold uppercase text-slate-400 tracking-wider">
+                        Mavjud Subtitrlar ro'yxati ({subtitles.length})
+                      </h4>
+
+                      {subtitlesLoading && subtitles.length === 0 ? (
+                        <div className="py-12 text-center text-xs text-slate-500 font-mono">
+                          Subtitrlar yuklanmoqda...
+                        </div>
+                      ) : subtitles.length === 0 ? (
+                        <div className="py-12 text-center text-xs text-slate-500 font-mono flex flex-col items-center justify-center gap-2">
+                          <AlertCircle className="w-6 h-6 text-slate-600" />
+                          Hech qanday subtitr topilmadi.
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse">
+                            <thead>
+                              <tr className="border-b border-slate-800 text-[10px] uppercase text-slate-500 tracking-wider select-none font-semibold font-mono">
+                                <th className="pb-2.5 font-bold">Loyiha Nomi</th>
+                                <th className="pb-2.5 font-bold">Qism</th>
+                                <th className="pb-2.5 font-bold">Fayl nomi</th>
+                                <th className="pb-2.5 font-bold">Til/Qatorlar</th>
+                                <th className="pb-2.5 font-bold">Yaratilgan vaqt</th>
+                                <th className="pb-2.5 font-bold text-right text-sky-400">Amallar</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/40 text-[11px] font-mono text-slate-300">
+                              {subtitles.map((sub, i) => (
+                                <tr key={i} className="hover:bg-slate-900/40 transition-colors">
+                                  <td className="py-2.5 text-white font-semibold font-sans">
+                                    <div className="flex flex-col">
+                                      <span>{sub.projectTitle}</span>
+                                      <span className="text-[9px] text-slate-500 uppercase">{sub.projectType}</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-2.5 text-slate-300">
+                                    {sub.episodeNumber ? `Qism: ${sub.episodeNumber}` : 'N/A'}
+                                  </td>
+                                  <td className="py-2.5 text-slate-400 select-all truncate max-w-[150px]" title={sub.fileName}>
+                                    {sub.fileName}
+                                  </td>
+                                  <td className="py-2.5 text-slate-300">
+                                    <span className="text-emerald-400 font-semibold">{sub.targetLanguage.toUpperCase()}</span> | {sub.dialogueRows} qator
+                                  </td>
+                                  <td className="py-2.5 text-slate-400">
+                                    {new Date(sub.createdAt).toLocaleString()}
+                                  </td>
+                                  <td className="py-2.5 text-right font-sans">
+                                    {sub.originalFileId && (
+                                      <button
+                                        onClick={() => handleDownloadSubtitle(sub.id, 'original', `original_${sub.fileName}`)}
+                                        className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[10px] font-semibold px-2 py-1 rounded cursor-pointer transition-all duration-150 inline-block mr-2"
+                                        disabled={subtitlesDownloadingId === `${sub.id}_original`}
+                                      >
+                                        {subtitlesDownloadingId === `${sub.id}_original` ? 'Yuklanmoqda...' : 'Original'}
+                                      </button>
+                                    )}
+                                    {sub.translatedFileId && (
+                                      <button
+                                        onClick={() => handleDownloadSubtitle(sub.id, 'translated', `translated_${sub.fileName}`)}
+                                        className="bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/20 text-[10px] font-semibold px-2 py-1 rounded cursor-pointer transition-all duration-150 inline-block"
+                                        disabled={subtitlesDownloadingId === `${sub.id}_translated`}
+                                      >
+                                        {subtitlesDownloadingId === `${sub.id}_translated` ? 'Yuklanmoqda...' : 'Tarjima (UZ)'}
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
                             </tbody>
                           </table>
                         </div>

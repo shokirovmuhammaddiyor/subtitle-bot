@@ -36,6 +36,9 @@ if (db && db.data) {
   if (db.data.settings.geminiApiKey && !process.env.GEMINI_API_KEY) {
     process.env.GEMINI_API_KEY = db.data.settings.geminiApiKey;
   }
+  if (db.data.settings.aiModel && !process.env.GEMINI_MODEL) {
+    process.env.GEMINI_MODEL = db.data.settings.aiModel;
+  }
   if (db.data.settings.telegramApiId && !process.env.TELEGRAM_API_ID) {
     process.env.TELEGRAM_API_ID = db.data.settings.telegramApiId;
   }
@@ -167,9 +170,10 @@ const validateLocaleYaml = async (yamlText) => {
 // Automated Daily Backup Task for db.json
 async function runBackupProcedure() {
   try {
-    await fs.mkdir('backups', { recursive: true });
     const todayStr = new Date().toISOString().slice(0, 10);
-    const backupPath = path.join('backups', `backup_${todayStr}.json`);
+    const todayTime = Date.now();
+    const filename = `backup_${todayStr}.json`;
+    const tempPath = path.join(os.tmpdir(), filename);
 
     // Read current db.json content
     let dbContent;
@@ -180,30 +184,46 @@ async function runBackupProcedure() {
       return;
     }
 
-    // Write today's backup file
-    await fs.writeFile(backupPath, dbContent, 'utf-8');
-    console.log(`[BACKUP] Successfully created backup for today: ${backupPath}`);
+    // Write temp file
+    await fs.writeFile(tempPath, dbContent, 'utf-8');
 
-    // Prune backups older than 7 days
-    const files = await fs.readdir('backups');
-    const backupFiles = files
-      .filter(f => /^backup_\d{4}-\d{2}-\d{2}\.json$/.test(f))
-      .sort(); // alphanumeric sorting is chronological YYYY-MM-DD
-
-    if (backupFiles.length > 7) {
-      const filesToDelete = backupFiles.slice(0, backupFiles.length - 7);
-      for (const file of filesToDelete) {
-        await fs.unlink(path.join('backups', file));
-        console.log(`[BACKUP PRUNE] Deleted old backup file: ${file}`);
-      }
+    // Upload to Telegram channel
+    const uploadRes = await uploadFileToChannel(filename, dbContent, 'backup');
+    
+    // Save to database list
+    if (!db.data.backups) db.data.backups = [];
+    
+    const sizeStr = `${(Buffer.byteLength(dbContent, 'utf-8') / 1024).toFixed(2)} KB`;
+    
+    // Prune existing backup for today to avoid duplicates
+    db.data.backups = db.data.backups.filter(b => b.filename !== filename);
+    
+    db.data.backups.push({
+      id: todayTime.toString(),
+      filename,
+      fileId: uploadRes.fileId || `simulated_backup_file_id`,
+      link: uploadRes.link || '',
+      size: sizeStr,
+      createdAt: new Date().toISOString()
+    });
+    
+    // Prune list older than 7 items
+    if (db.data.backups.length > 7) {
+      db.data.backups = db.data.backups.slice(db.data.backups.length - 7);
     }
+    
+    await db.save();
+    console.log(`[BACKUP] Successfully created cloud backup: ${filename}`);
+
+    // Remove temp file
+    await fs.unlink(tempPath).catch(() => {});
   } catch (err) {
     console.error('[BACKUP ERROR] Failed to run automated backup procedure:', err);
   }
 }
 
-// Start automated daily backup immediately on start, and check/run every 4 hours there-after
-runBackupProcedure();
+// Start automated daily backup 5 seconds after start, and check/run every 4 hours there-after
+setTimeout(runBackupProcedure, 5000);
 setInterval(runBackupProcedure, 4 * 60 * 60 * 1000);
 
 // Automated 24h Cloud Backup Task for db.json to Telegram Storage Channel
@@ -302,7 +322,8 @@ app.use('/api/admin', (req, res, next) => {
 
 app.post('/api/admin/login', (req, res) => {
   const { username, password } = req.body;
-  if (username === 'admin' && password === 'Aa948385950@') {
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Aa948385950@';
+  if (username === 'admin' && password === ADMIN_PASSWORD) {
     const token = 'tok_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
     const ipRaw = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
     // Clean IP address mapping
@@ -535,20 +556,22 @@ app.get('/api/config', async (req, res) => {
     cardOwner: settings.cardOwner || '',
     packages: settings.packages || [],
     telegramApiId: process.env.TELEGRAM_API_ID || '',
-    telegramApiHash: process.env.TELEGRAM_API_HASH || ''
+    telegramApiHash: process.env.TELEGRAM_API_HASH || '',
+    aiModel: settings.aiModel || process.env.GEMINI_MODEL || 'gemini-2.0-flash'
   });
 });
 
 app.post('/api/config', async (req, res) => {
   try {
-    const { botToken, geminiApiKey, defaultBatchSize, systemPrompt, auto_download_enabled, storage_channel_id, cardNumber, cardOwner, packages, telegramApiId, telegramApiHash } = req.body;
+    const { botToken, geminiApiKey, defaultBatchSize, systemPrompt, auto_download_enabled, storage_channel_id, cardNumber, cardOwner, packages, telegramApiId, telegramApiHash, aiModel } = req.body;
     process.env.BOT_TOKEN = botToken;
     process.env.GEMINI_API_KEY = geminiApiKey;
     process.env.DEFAULT_BATCH_SIZE = defaultBatchSize;
     process.env.TELEGRAM_API_ID = telegramApiId;
     process.env.TELEGRAM_API_HASH = telegramApiHash;
+    if (aiModel) process.env.GEMINI_MODEL = aiModel;
 
-    const envContent = `BOT_TOKEN=${botToken}\nGEMINI_API_KEY=${geminiApiKey}\nDEFAULT_BATCH_SIZE=${defaultBatchSize}\nPORT=3000\nTELEGRAM_API_ID=${telegramApiId || ''}\nTELEGRAM_API_HASH=${telegramApiHash || ''}\n`;
+    const envContent = `BOT_TOKEN=${botToken}\nGEMINI_API_KEY=${geminiApiKey}\nDEFAULT_BATCH_SIZE=${defaultBatchSize}\nPORT=3000\nTELEGRAM_API_ID=${telegramApiId || ''}\nTELEGRAM_API_HASH=${telegramApiHash || ''}\nGEMINI_MODEL=${aiModel || process.env.GEMINI_MODEL || 'gemini-2.0-flash'}\n`;
     await fs.writeFile('.env', envContent, 'utf-8');
 
     await db.updateSettings({
@@ -557,6 +580,7 @@ app.post('/api/config', async (req, res) => {
       telegramApiId: telegramApiId || '',
       telegramApiHash: telegramApiHash || '',
       defaultBatchSize: parseInt(defaultBatchSize) || 45,
+      aiModel: aiModel || settings.aiModel || 'gemini-2.0-flash',
       systemPrompt: systemPrompt || '',
       auto_download_enabled: !!auto_download_enabled,
       storage_channel_id: storage_channel_id || '',
@@ -665,47 +689,70 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Admin Backup & Restore Endpoints
+// Helper to download files from Telegram storage channel
+async function downloadFileFromChannel(fileId, filename) {
+  const s = await db.getSettings();
+  
+  // If it's numeric, it is a GramJS message ID in the channel
+  if (fileId && !isNaN(fileId) && s.telegram_account && s.telegram_account.status === 'CONNECTED' && s.telegram_account.session) {
+    try {
+      logEvent('INFO', 'GramJS orqali fayl yuklab olinmoqda: ' + filename + ' (ID: ' + fileId + ')');
+      const userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
+      if (userClient) {
+        const messages = await userClient.getMessages(s.storage_channel_id, { ids: [Number(fileId)] });
+        if (messages && messages[0] && messages[0].media) {
+          const buffer = await userClient.downloadMedia(messages[0].media);
+          await userClient.disconnect();
+          return buffer;
+        }
+        await userClient.disconnect();
+      }
+    } catch (e) {
+      console.error('GramJS download error:', e.message);
+      logEvent('ERROR', "GramJS orqali yuklab olishda xatolik: " + e.message);
+    }
+  }
+
+  // Fallback to Telegraf if fileId is a string bot file_id
+  if (activeBotInstance && typeof fileId === 'string' && !fileId.startsWith('simulated_')) {
+    try {
+      logEvent('INFO', 'Telegraf orqali fayl yuklab olinmoqda: ' + filename);
+      const fileLink = await activeBotInstance.telegram.getFileLink(fileId);
+      const res = await fetch(fileLink.href);
+      const buffer = await res.arrayBuffer();
+      return Buffer.from(buffer);
+    } catch (e) {
+      console.error('Telegram download error:', e.message);
+      logEvent('ERROR', "Telegraf orqali yuklab olishda xatolik: " + e.message);
+    }
+  }
+
+  return null;
+}
+
+// Admin Backup & Restore Endpoints (Telegram Cloud Storage Backups)
 app.get('/api/admin/backups', async (req, res) => {
   try {
-    await fs.mkdir('backups', { recursive: true });
-    const files = await fs.readdir('backups');
-    const backupFiles = files.filter(f => /^backup_\d{4}-\d{2}-\d{2}\.json$/.test(f));
-    const list = [];
-    for (const file of backupFiles) {
-      const filePath = path.join('backups', file);
-      const stat = await fs.stat(filePath);
-      list.push({
-        filename: file,
-        date: file.replace('backup_', '').replace('.json', ''),
-        size: `${(stat.size / 1024).toFixed(2)} KB`,
-        createdAt: stat.mtime
-      });
-    }
-    // Sort descending (newest first)
-    list.sort((a, b) => b.filename.localeCompare(a.filename));
-    res.json(list);
+    res.json(db.data.backups || []);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get('/api/admin/backups/download/:filename', async (req, res) => {
+app.get('/api/admin/backups/download/:id', async (req, res) => {
   try {
-    const { filename } = req.params;
-    const safePattern = /^backup_\d{4}-\d{2}-\d{2}\.json$/;
-    if (!safePattern.test(filename)) {
-      return res.status(400).json({ error: 'Invalid backup file name' });
+    const { id } = req.params;
+    const backup = (db.data.backups || []).find(b => b.id === id);
+    if (!backup) {
+      return res.status(404).json({ error: 'Zaxira topilmadi' });
     }
-    const backupPath = path.join('backups', filename);
-    try {
-      await fs.access(backupPath);
-    } catch (e) {
-      return res.status(404).json({ error: 'Backup file not found' });
+    const buffer = await downloadFileFromChannel(backup.fileId, backup.filename);
+    if (!buffer) {
+      return res.status(500).json({ error: 'Zaxira faylini yuklab olishda xatolik yuz berdi' });
     }
-    const content = await fs.readFile(backupPath, 'utf-8');
-    res.setHeader('Content-disposition', `attachment; filename=${filename}`);
+    res.setHeader('Content-disposition', `attachment; filename=${backup.filename}`);
     res.setHeader('Content-type', 'application/json');
-    res.send(content);
+    res.send(buffer);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -714,7 +761,7 @@ app.get('/api/admin/backups/download/:filename', async (req, res) => {
 app.post('/api/admin/backups/create', async (req, res) => {
   try {
     await runBackupProcedure();
-    logEvent('SUCCESS', 'Admin tomonidan zaxira nusxa yaratildi.');
+    logEvent('SUCCESS', 'Admin tomonidan zaxira nusxa yaratildi va Telegram Storage kanaliga yuklandi.');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -723,39 +770,45 @@ app.post('/api/admin/backups/create', async (req, res) => {
 
 app.post('/api/admin/backups/restore', async (req, res) => {
   try {
-    const { filename } = req.body;
-    if (!filename) {
-      return res.status(400).json({ error: 'Filename is required' });
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ error: 'Zaxira ID raqami talab qilinadi' });
     }
-    const safePattern = /^backup_\d{4}-\d{2}-\d{2}\.json$/;
-    if (!safePattern.test(filename)) {
-      return res.status(400).json({ error: 'Invalid backup file name' });
-    }
-    const backupPath = path.join('backups', filename);
-    try {
-      await fs.access(backupPath);
-    } catch (e) {
-      return res.status(404).json({ error: 'Backup file not found' });
+    const backup = (db.data.backups || []).find(b => b.id === id);
+    if (!backup) {
+      return res.status(404).json({ error: 'Zaxira topilmadi' });
     }
 
-    // Emergency custom full snapshot of current state before overwriting
+    // Emergency local backup of current state
     try {
       const current_db = await fs.readFile('db.json', 'utf-8');
       await fs.writeFile('backups/pre_restore_backup.json', current_db, 'utf-8');
-      logEvent('INFO', 'Emergency pre-restore backup created as backups/pre_restore_backup.json');
-    } catch (e) {
-      console.warn('Could not write pre-restore backup:', e.message);
+    } catch (e) {}
+
+    // Download content from Telegram
+    const buffer = await downloadFileFromChannel(backup.fileId, backup.filename);
+    if (!buffer) {
+      return res.status(500).json({ error: 'Zaxira faylini yuklab olishda xatolik' });
     }
 
-    const content = await fs.readFile(backupPath, 'utf-8');
+    const content = buffer.toString('utf-8');
     await fs.writeFile('db.json', content, 'utf-8');
     await db.init();
     resetAi();
 
-    logEvent('SUCCESS', `${filename} zaxira nusxasidan tizim holati muvaffaqiyatli qayta tiklandi.`);
+    const s = await db.getSettings();
+    if (s && s.botToken) {
+      process.env.BOT_TOKEN = s.botToken;
+      try {
+        const envContent = `BOT_TOKEN=${s.botToken}\nGEMINI_API_KEY=${s.geminiApiKey || ''}\nDEFAULT_BATCH_SIZE=${s.defaultBatchSize || 45}\nPORT=3000\nTELEGRAM_API_ID=${s.telegram_account?.apiId || ''}\nTELEGRAM_API_HASH=${s.telegram_account?.apiHash || ''}\n`;
+        await fs.writeFile('.env', envContent, 'utf-8');
+      } catch (e) {}
+      await restartBot(s.botToken);
+    }
+
+    logEvent('SUCCESS', `${backup.filename} zaxiradan tizim holati muvaffaqiyatli tiklandi.`);
     res.json({ success: true });
   } catch (err) {
-    logEvent('ERROR', `Zaxiradan qayta tiklashda xatolik: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -776,8 +829,127 @@ app.post('/api/admin/backups/upload', async (req, res) => {
     await fs.writeFile('db.json', dbContent, 'utf-8');
     await db.init();
     resetAi();
+
+    const s = await db.getSettings();
+    if (s && s.botToken) {
+      process.env.BOT_TOKEN = s.botToken;
+      try {
+        const envContent = `BOT_TOKEN=${s.botToken}\nGEMINI_API_KEY=${s.geminiApiKey || ''}\nDEFAULT_BATCH_SIZE=${s.defaultBatchSize || 45}\nPORT=3000\nTELEGRAM_API_ID=${s.telegram_account?.apiId || ''}\nTELEGRAM_API_HASH=${s.telegram_account?.apiHash || ''}\n`;
+        await fs.writeFile('.env', envContent, 'utf-8');
+      } catch (e) {}
+      await restartBot(s.botToken);
+    }
+
     logEvent('SUCCESS', 'Zaxira ma\'lumotlar bazasi tashqi JSON fayldan muvaffaqiyatli tiklandi.');
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Mandatory Channels Endpoints
+app.get('/api/admin/mandatory-channels', async (req, res) => {
+  try {
+    const s = await db.getSettings();
+    res.json(s.mandatoryChannels || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/mandatory-channels', async (req, res) => {
+  try {
+    const { id, inviteLink, title } = req.body;
+    if (!id || !inviteLink || !title) {
+      return res.status(400).json({ error: 'Kanal ID, havola va nomi kiritilishi shart' });
+    }
+    const s = await db.getSettings();
+    if (!s.mandatoryChannels) s.mandatoryChannels = [];
+    
+    if (s.mandatoryChannels.some(c => c.id === id)) {
+      return res.status(400).json({ error: 'Ushbu kanal allaqachon qo\'shilgan' });
+    }
+    
+    s.mandatoryChannels.push({ id, inviteLink, title });
+    await db.save();
+    logEvent('SUCCESS', `Majburiy obuna kanali qo'shildi: ${title} (${id})`);
+    res.json(s.mandatoryChannels);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/mandatory-channels/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const s = await db.getSettings();
+    if (s.mandatoryChannels) {
+      s.mandatoryChannels = s.mandatoryChannels.filter(c => c.id !== id);
+      await db.save();
+    }
+    logEvent('SUCCESS', `Majburiy obuna kanali o'chirildi: ${id}`);
+    res.json(s.mandatoryChannels || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Subtitles List & Download Endpoints (Cloud Downloaded)
+app.get('/api/admin/subtitles', async (req, res) => {
+  try {
+    const list = [];
+    const episodes = db.data.episodes || [];
+    for (const ep of episodes) {
+      if (ep.originalFileId || ep.translatedFileId) {
+        const project = db.data.projects.find(p => p.id === ep.projectId);
+        list.push({
+          id: ep.id,
+          projectId: ep.projectId,
+          projectTitle: project ? project.title : 'Noma\'lum Loyiha',
+          projectType: project ? project.type : 'Noma\'lum',
+          episodeNumber: ep.episodeNumber,
+          fileName: ep.fileName || 'sub.srt',
+          dialogueRows: ep.dialogueRows || 0,
+          targetLanguage: ep.targetLanguage || 'uz',
+          createdAt: ep.createdAt || new Date().toISOString(),
+          originalFileId: ep.originalFileId,
+          translatedFileId: ep.translatedFileId
+        });
+      }
+    }
+    list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/subtitles/download/:episodeId/:fileType', async (req, res) => {
+  try {
+    const { episodeId, fileType } = req.params;
+    const episodes = db.data.episodes || [];
+    const ep = episodes.find(e => e.id === episodeId);
+    if (!ep) {
+      return res.status(404).json({ error: 'Epizod topilmadi' });
+    }
+
+    const fileId = fileType === 'original' ? ep.originalFileId : ep.translatedFileId;
+    if (!fileId) {
+      return res.status(404).json({ error: 'Fayl topilmadi' });
+    }
+
+    const baseName = ep.fileName || 'subtitle.srt';
+    const filename = fileType === 'original' ? `original_${baseName}` : `translated_${baseName}`;
+
+    // Download from channel
+    const buffer = await downloadFileFromChannel(fileId, filename);
+    if (!buffer) {
+      return res.status(500).json({ error: 'Faylni Telegram kanaldan yuklab olishda xatolik yuz berdi' });
+    }
+
+    res.setHeader('Content-disposition', `attachment; filename=${filename}`);
+    res.setHeader('Content-type', 'application/octet-stream');
+    res.send(buffer);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1306,23 +1478,101 @@ function setupBotHandlers(bot) {
       await ctx.answerCbQuery();
       const user = await db.getUser(ctx.from.id);
       if (!user.teamId) {
-        return ctx.reply("Jamoaga a'zo bo'ling.");
+        return ctx.editMessageText("Jamoaga a'zo bo'ling.", Markup.inlineKeyboard([
+          [Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]
+        ]));
       }
       await db.updateUser(user.id, { state: 'AWAITING_PROMO' });
-      await ctx.reply("🎁 Iltimos, promokodni yuboring:", Markup.inlineKeyboard([
+      const msg = await ctx.editMessageText("🎁 Iltimos, promokodni yuboring:", Markup.inlineKeyboard([
         [Markup.button.callback("⬅️ Bekor qilish", 'cancel_promo')]
       ]));
+      if (msg && msg.message_id) {
+        await db.updateUser(user.id, { lastMenuMessageId: msg.message_id });
+      }
     } catch (e) { }
   });
-
   bot.action('cancel_promo', async (ctx) => {
     try {
       await ctx.answerCbQuery();
       await db.updateUser(ctx.from.id, { state: 'IDLE' });
       const user = await db.getUser(ctx.from.id);
-      await sendTeamMenu(ctx, user);
+      await sendTeamMenu(ctx, user, true);
     } catch (e) { }
   });
+
+  async function checkMandatorySubscription(ctx, userId) {
+    const settings = await db.getSettings();
+    const channels = settings.mandatoryChannels || [];
+    if (channels.length === 0) return true;
+
+    for (const chan of channels) {
+      try {
+        const member = await ctx.telegram.getChatMember(chan.id, userId);
+        const allowed = ['member', 'creator', 'administrator'].includes(member.status);
+        if (!allowed) {
+          return false;
+        }
+      } catch (err) {
+        console.error(`Error checking channel subscription for ${chan.id}:`, err.message);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function promptSubscription(ctx, channels, edit = false) {
+    const text = "👋 *Assalomu alaykum!*\n\nBotdan foydalanish uchun quyidagi homiy kanallarimizga a'zo bo'lishingiz shart:\n\n" +
+      channels.map((c, idx) => `${idx + 1}. *${c.title || 'Homiymiz'}*`).join('\n') +
+      "\n\nKanallarga a'zo bo'lib, so'ng \"🔄 Tekshirish\" tugmasini bosing.";
+
+    const buttons = channels.map(c => [Markup.button.url(c.title || 'A\'zo bo\'lish 🔗', c.inviteLink)]);
+    buttons.push([Markup.button.callback("🔄 Tekshirish / Verify", "verify_sub")]);
+
+    const kb = Markup.inlineKeyboard(buttons);
+
+    if (edit) {
+      try {
+        return await ctx.editMessageText(text, { parse_mode: 'Markdown', ...kb });
+      } catch (e) {
+        return await ctx.reply(text, { parse_mode: 'Markdown', ...kb });
+      }
+    } else {
+      return await ctx.reply(text, { parse_mode: 'Markdown', ...kb });
+    }
+  }
+
+  bot.action('verify_sub', async (ctx) => {
+    try {
+      const userId = ctx.from.id;
+      const isSubscribed = await checkMandatorySubscription(ctx, userId);
+      if (isSubscribed) {
+        subCheckCache.set(userId, { result: true, timestamp: Date.now() });
+        await ctx.answerCbQuery("Rahmat! Siz muvaffaqiyatli a'zo bo'ldingiz. 🎉", { show_alert: true });
+        try { await ctx.deleteMessage(); } catch (e) {}
+        const user = await db.getUser(userId);
+        await sendTeamMenu(ctx, user);
+      } else {
+        subCheckCache.delete(userId);
+        await ctx.answerCbQuery("❌ Siz hali barcha kanallarga a'zo bo'lmagansiz. Iltimos tekshirib ko'ring.", { show_alert: true });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  bot.on('chat_join_request', async (ctx) => {
+    try {
+      const { chat, from } = ctx.chatJoinRequest;
+      logEvent('INFO', `Join request received from @${from.username || from.id} for chat ${chat.title || chat.id}`);
+      await ctx.telegram.approveChatJoinRequest(chat.id, from.id);
+      logEvent('SUCCESS', `Auto-approved join request for @${from.username || from.id} in ${chat.title || chat.id}`);
+    } catch (e) {
+      console.error("Error approving join request:", e.message);
+    }
+  });
+
+  // Per-user subscription check cache (30 soniya muddatli)
+  const subCheckCache = new Map();
 
   // Middleware to block/ban users & clean up old keyboards
   bot.use(async (ctx, next) => {
@@ -1340,6 +1590,33 @@ function setupBotHandlers(bot) {
               }
             } catch (e) { }
             return; // Terminate request
+          }
+
+          // Check mandatory subscription (cache bilan optimallashtirilgan)
+          const isVerifySub = ctx.callbackQuery && ctx.callbackQuery.data === 'verify_sub';
+          const isStartCmd = ctx.message && ctx.message.text && ctx.message.text.startsWith('/start');
+
+          if (!isVerifySub && !isStartCmd) {
+            const settings = await db.getSettings();
+            const channels = settings.mandatoryChannels || [];
+
+            if (channels.length > 0) {
+              const cached = subCheckCache.get(fromId);
+              const now = Date.now();
+              let isSubscribed;
+
+              if (cached && (now - cached.timestamp) < 30000) {
+                isSubscribed = cached.result;
+              } else {
+                isSubscribed = await checkMandatorySubscription(ctx, fromId);
+                subCheckCache.set(fromId, { result: isSubscribed, timestamp: now });
+              }
+
+              if (!isSubscribed) {
+                await promptSubscription(ctx, channels, false);
+                return; // block execution
+              }
+            }
           }
 
           // Clean up old active inline keyboard if this is a new command or message
@@ -1673,7 +1950,7 @@ function setupBotHandlers(bot) {
   bot.action('cancel_team_flow', async (ctx) => {
     try {
       await ctx.answerCbQuery();
-      await db.updateUser(ctx.from.id, { state: 'IDLE' });
+      await db.updateUser(ctx.from.id, { state: 'IDLE', tempTeamName: null });
       await sendStartTeamMenu(ctx, true);
     } catch (e) {
       console.error(e);
@@ -1714,7 +1991,10 @@ function setupBotHandlers(bot) {
   bot.action('action_translate_start', async (ctx) => {
     try {
       await ctx.answerCbQuery();
-      await ctx.reply("Tarjimani boshlash uchun subtitr (.srt, .ass, yoki .vtt) faylini yuboring. 📥");
+      const user = await db.getUser(ctx.from.id);
+      await ctx.editMessageText("Tarjimani boshlash uchun subtitr (.srt, .ass, yoki .vtt) faylini yuboring. 📥", Markup.inlineKeyboard([
+        [Markup.button.callback("⬅️ Bekor qilish / Cancel", 'back_to_menu')]
+      ]));
     } catch (e) {
       console.error(e);
     }
@@ -1795,9 +2075,9 @@ function setupBotHandlers(bot) {
         const purchaseText = "⚠️ *Sizda faol Oylik Paket mavjud emas!*\n\n" +
           "Mavjud yangi anime subtitrlarini ko'rish va yuklab olish uchun jamoangiz nomidan oylik tariflardan birini faollashtiring.\n\n" +
           "*Mavjud Oylik Tariflar (SubsPlease):*\n" +
-          "• *Boshlang'ich* - So'nggi 10 ta yangi anime qismlari (Narxi: 50,000 O'zS)\n" +
-          "• *FanDub* - So'nggi 25 ta yangi anime qismlari (Narxi: 120,000 O'zS)\n" +
-          "• *Studio* - So'nggi 50 ta yangi anime qismlari (Narxi: 200,000 O'zS)\n\n" +
+          "• *Boshlang'ich* - So'nggi 10 ta yangi anime qismi\n" +
+          "• *FanDub* - So'nggi 25 ta yangi anime qismi\n" +
+          "• *Studio* - So'nggi 50 ta yangi anime qismi\n\n" +
           "Tarif sotib olish uchun jamoa hisobini to'ldirish bo'limiga o'ting:";
 
         const buttons = [
@@ -1828,7 +2108,7 @@ function setupBotHandlers(bot) {
       const allowedList = completedList.slice(0, limit);
 
       if (allowedList.length === 0) {
-        const emptyText = `🌸 *Yangi Anime Subtitrlari (SubsPlease)*\n\nHozirda tayyor (Toliq yuklangan) yangi epizodlar mavjud emas. Iltimos, tizim yangi anime yuklab, o'zbekchalashtirishini kuting!\n\n_🕒 So'nggi yangilanish: ${new Date().toLocaleTimeString('uz-UZ')}_`;
+        const emptyText = `🌸 *Yangi Anime Subtitrlari*\n\nHozirda tayyor (Toliq yuklangan) yangi epizodlar mavjud emas. Iltimos, tizim yangi anime yuklab, o'zbekchalashtirishini kuting!\n\n_🕒 So'nggi yangilanish: ${new Date().toLocaleTimeString('uz-UZ')}_`;
         const emptyButtons = [
           [Markup.button.callback("🔄 Yangilash", `action_new_subtitles_page_${pageIndex}`)],
           [Markup.button.callback("⬅️ Orqaga", "back_to_menu")]
@@ -1852,7 +2132,7 @@ function setupBotHandlers(bot) {
       const startIdx = pageIndex * itemsPerPage;
       const pagedList = allowedList.slice(startIdx, startIdx + itemsPerPage);
 
-      let header = `🌸 **Yangi Anime Subtitrlari (SubsPlease)**\n\nJamoa Tarifikgiz: **${team.activeSubscription.replace('monthly_', '').toUpperCase()}** (Maksimal so'nggi ${limit} tani ko'ra olasiz).\n\nQuyidagi ro'yxatdan kerakli epizodlarni tanlang va bevosita yuklab oling:\n\n_🕒 So'nggi yangilanish: ${new Date().toLocaleTimeString('uz-UZ')}_\n`;
+      let header = `🌸 **Yangi Anime Subtitrlari**\n\nJamoa Tarifikgiz: **${(team.activeSubscription || '').replace('monthly_', '').toUpperCase() || 'NOMA\'LUM'}** (Maksimal so'nggi ${limit} tani ko'ra olasiz).\n\nQuyidagi ro'yxatdan kerakli epizodlarni tanlang va bevosita yuklab oling:\n\n_🕒 So'nggi yangilanish: ${new Date().toLocaleTimeString('uz-UZ')}_\n`;
 
       const buttons = [];
       for (const ep of pagedList) {
@@ -2050,42 +2330,46 @@ function setupBotHandlers(bot) {
     }
   });
 
+  async function sendTeamMembersMenu(ctx, user) {
+    const team = await db.getTeam(user.teamId);
+    if (!team) return;
+
+    let msgText = `👥 *${team.name}* Jamoasi A'zolari:\n\n`;
+    const buttons = [];
+
+    for (const memberId of team.members) {
+      const mUser = await db.getUser(memberId);
+      const nameLabel = mUser.username ? `@${mUser.username}` : `Foydalanuvchi #${mUser.id}`;
+
+      if (memberId === team.ownerId) {
+        msgText += `👑 *Administrator:* ${nameLabel}\n`;
+      } else {
+        msgText += `• *A'zo:* ${nameLabel}\n`;
+        if (user.id === team.ownerId) {
+          // Owner can manage other users
+          buttons.push([
+            Markup.button.callback(`👑 Adminlikni Berish (${mUser.username || memberId})`, `promote_${memberId}`),
+            Markup.button.callback(`❌ Haydash`, `kick_${memberId}`)
+          ]);
+        }
+      }
+    }
+
+    // Add invite line
+    const botInfo = await ctx.telegram.getMe();
+    const inviteUrl = `https://t.me/${botInfo.username}?start=invite_${team.id}`;
+    msgText += `\n🔗 *Taklif Havolasi:* \`${inviteUrl}\` (Boshqalarni qo'shish uchun shu havolani jo'nating)`;
+
+    buttons.push([Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]);
+
+    await ctx.editMessageText(msgText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+  }
+
   bot.action('action_team_members', async (ctx) => {
     try {
       await ctx.answerCbQuery();
       const user = await db.getUser(ctx.from.id);
-      const team = await db.getTeam(user.teamId);
-      if (!team) return;
-
-      let msgText = `👥 *${team.name}* Jamoasi A'zolari:\n\n`;
-      const buttons = [];
-
-      for (const memberId of team.members) {
-        const mUser = await db.getUser(memberId);
-        const nameLabel = mUser.username ? `@${mUser.username}` : `Foydalanuvchi #${mUser.id}`;
-
-        if (memberId === team.ownerId) {
-          msgText += `👑 *Administrator:* ${nameLabel}\n`;
-        } else {
-          msgText += `• *A'zo:* ${nameLabel}\n`;
-          if (user.id === team.ownerId) {
-            // Owner can manage other users
-            buttons.push([
-              Markup.button.callback(`👑 Adminlikni Berish (${mUser.username || memberId})`, `promote_${memberId}`),
-              Markup.button.callback(`❌ Haydash`, `kick_${memberId}`)
-            ]);
-          }
-        }
-      }
-
-      // Add invite line
-      const botInfo = await ctx.telegram.getMe();
-      const inviteUrl = `https://t.me/${botInfo.username}?start=invite_${team.id}`;
-      msgText += `\n🔗 *Taklif Havolasi:* \`${inviteUrl}\` (Boshqalarni qo'shish uchun shu havolani jo'nating)`;
-
-      buttons.push([Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]);
-
-      await ctx.editMessageText(msgText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+      await sendTeamMembersMenu(ctx, user);
     } catch (e) {
       console.error(e);
     }
@@ -2093,17 +2377,18 @@ function setupBotHandlers(bot) {
 
   bot.action(/promote_(.+)/, async (ctx) => {
     try {
-      await ctx.answerCbQuery();
       const targetId = Number(ctx.match[1]);
       const user = await db.getUser(ctx.from.id);
       const team = await db.getTeam(user.teamId);
       if (team && team.ownerId === user.id) {
         team.ownerId = targetId;
         await db.save();
-        await ctx.reply(`Jamoa adminligi boshqa foydalanuvchiga muvaffaqiyatli topshirildi.`);
+        await ctx.answerCbQuery(`Jamoa adminligi boshqa foydalanuvchiga muvaffaqiyatli topshirildi.`, { show_alert: true });
+      } else {
+        await ctx.answerCbQuery();
       }
       const refreshedUser = await db.getUser(ctx.from.id);
-      await sendTeamMenu(ctx, refreshedUser);
+      await sendTeamMembersMenu(ctx, refreshedUser);
     } catch (e) {
       console.error(e);
     }
@@ -2111,7 +2396,6 @@ function setupBotHandlers(bot) {
 
   bot.action(/kick_(.+)/, async (ctx) => {
     try {
-      await ctx.answerCbQuery();
       const targetId = Number(ctx.match[1]);
       const user = await db.getUser(ctx.from.id);
       const team = await db.getTeam(user.teamId);
@@ -2120,10 +2404,12 @@ function setupBotHandlers(bot) {
         try {
           await ctx.telegram.sendMessage(targetId, `Siz '${team.name}' jamoasidan chetlatildingiz.`);
         } catch (mErr) { }
-        await ctx.reply(`A'zo jamoadan chiqarib yuborildi.`);
+        await ctx.answerCbQuery(`A'zo jamoadan chiqarib yuborildi.`, { show_alert: true });
+      } else {
+        await ctx.answerCbQuery();
       }
       const refreshedUser = await db.getUser(ctx.from.id);
-      await sendTeamMenu(ctx, refreshedUser);
+      await sendTeamMembersMenu(ctx, refreshedUser);
     } catch (e) {
       console.error(e);
     }
@@ -2139,7 +2425,20 @@ function setupBotHandlers(bot) {
       const loc = getLocaleByCtx(ctx);
       const settings = await db.getSettings();
 
-      const balanceText = `Hozirgi Balans: *${team.tokens}* Token.\n\nHar 1 qator subtitr tarjimasi uchun 1 token ishlatiladi. Agar tarjima paytida tizimda uzilish bo'lsa, qolgan tokenlaringiz avtomatik tarzda qaytariladi.\n\nXarid turini tanlang:`;
+      let balanceText = `💰 *Jamoa Balansi va Obunasi*\n\n` +
+        `• Hozirgi Balans: *${team.tokens}* Token\n`;
+
+      if (team.activeSubscription) {
+        const expiresStr = team.subscriptionExpiresAt
+          ? new Date(team.subscriptionExpiresAt).toLocaleDateString('uz-UZ')
+          : "Cheksiz muddat";
+        balanceText += `• Faol obuna: *${team.activeSubscription.replace('monthly_', '').toUpperCase()}*\n` +
+          `• Amal qilish muddati: *${expiresStr}*\n`;
+      } else {
+        balanceText += `• Faol obuna: *Yo'q*\n`;
+      }
+
+      balanceText += `\nHar 1 qator subtitr tarjimasi uchun 1 token ishlatiladi (agar obuna faol bo'lmasa). Obuna faol bo'lsa, Anime qismlarining so'nggi tarjimalari bepul yuklanadi.\n\nXarid turini tanlang:`;
 
       const buttons = [
         [Markup.button.callback("🪙 Token xarid qilish", 'category_tokens')],
@@ -2456,10 +2755,8 @@ function setupBotHandlers(bot) {
       await ctx.answerCbQuery();
       const userId = ctx.from.id;
       await db.updateUser(userId, { state: 'IDLE', currentSession: null });
-      try { await ctx.deleteMessage(); } catch (e) { }
-      await ctx.reply("Tarjima qilish bekor qilindi. ❌");
       const user = await db.getUser(userId);
-      await sendTeamMenu(ctx, user);
+      await sendTeamMenu(ctx, user, true);
     } catch (e) {
       console.error(e);
     }
@@ -2576,7 +2873,9 @@ function setupBotHandlers(bot) {
         user.state = 'ENTER_TEAM_CHANNEL';
         user.tempTeamName = ctx.message.text;
         await db.updateUser(userId, { state: 'ENTER_TEAM_CHANNEL', tempTeamName: user.tempTeamName });
-        await ctx.reply(loc.enter_team_channel || "Telegram kanali nomini yuboring:");
+        await ctx.reply(loc.enter_team_channel || "Telegram kanali nomini yuboring:", Markup.inlineKeyboard([
+          [Markup.button.callback("⬅️ Bekor qilish / Cancel", 'cancel_team_flow')]
+        ]));
       } else if (user.state === 'ENTER_TEAM_CHANNEL') {
         const teamName = user.tempTeamName || "Mening Jamoam";
         const channelLink = ctx.message.text;
@@ -2666,10 +2965,22 @@ function setupBotHandlers(bot) {
 
 async function sendLanguageKeyboard(ctx) {
   const loc = getLocaleByCtx(ctx);
-  await ctx.reply(loc.select_language, Markup.inlineKeyboard([
+  const kb = Markup.inlineKeyboard([
     [Markup.button.callback(loc.lang_uzbek, 'lang_uzbek'), Markup.button.callback(loc.lang_english, 'lang_english')],
-    [Markup.button.callback(loc.lang_russian, 'lang_russian'), Markup.button.callback(loc.lang_custom, 'lang_custom')]
-  ]));
+    [Markup.button.callback(loc.lang_russian, 'lang_russian'), Markup.button.callback(loc.lang_custom, 'lang_custom')],
+    [Markup.button.callback('❌ Bekor qilish', 'cancel_translation')]
+  ]);
+  // Mavjud xabarni edit qilish, aks holda yangi xabar yuborish
+  try {
+    await ctx.editMessageText(loc.select_language, kb);
+  } catch (e) {
+    try {
+      const msg = await ctx.reply(loc.select_language, kb);
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+      }
+    } catch (e2) {}
+  }
 }
 
 async function editMessageLanguageKeyboard(ctx) {
@@ -2727,11 +3038,7 @@ async function runTranslation(ctx, user) {
     if (!hasShownQueueAlert) {
       const alertQueueMsg = loc.concurrency_limit || "Sizning jamoangiz uchun parallel ishlayotgan tarjima jarayoni mavjud. Siz navbatga qo'yildingiz. Bo'sh slot paydo bo'lishi bilan tarjima davom etadi!";
       try {
-        if (isCallback) {
-          await ctx.editMessageText(alertQueueMsg);
-        } else {
-          await ctx.reply(alertQueueMsg);
-        }
+        await ctx.reply(alertQueueMsg);
       } catch (e) { }
       hasShownQueueAlert = true;
     }
@@ -2740,9 +3047,20 @@ async function runTranslation(ctx, user) {
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
-  // Deduct tokens
-  team.tokens -= requiredTokens;
-  await db.updateTeam(team.id, { tokens: team.tokens });
+  // Navbatdan chiqqandan keyin joriy balansni qayta yuklash (parallel tarjimalar tokenlarni o'zgartirishi mumkin)
+  const freshTeam = await db.getTeam(team.id);
+  if (!freshTeam) {
+    return ctx.reply("Jamoangiz topilmadi. Iltimos qaytadan urinib ko'ring.");
+  }
+  if (freshTeam.tokens < requiredTokens) {
+    const alertMsg = `Jamoangiz balansida yetarli tokenlar mavjud emas. Ushbu sarlavha uchun jami **${requiredTokens}** ta token talab qilinadi, hozir esa **${freshTeam.tokens}** ta bor. Iltimos, balansni to'ldiring.`;
+    return ctx.reply(alertMsg, { parse_mode: 'Markdown' });
+  }
+  
+  // Deduct tokens (navbatdan chiqqandan keyin)
+  freshTeam.tokens -= requiredTokens;
+  team.tokens = freshTeam.tokens;
+  await db.updateTeam(team.id, { tokens: freshTeam.tokens });
 
   // Jamoa balansi 100 tadan kam qolganda ogohlantirish funksiyasi
   if (team.tokens < 100 && !team.hasLowBalanceWarned) {
@@ -2767,13 +3085,9 @@ async function runTranslation(ctx, user) {
   try {
     logEvent('INFO', `Starting job for user @${ctx.from.username || userId}. File: ${session.fileName}`);
 
-    if (isCallback) {
-      statusMsg = await ctx.reply(loc.processing);
-      progressMessageId = statusMsg.message_id;
-    } else {
-      statusMsg = await ctx.reply(loc.processing);
-      progressMessageId = statusMsg.message_id;
-    }
+    // Tarjima jarayonini boshlash haqida xabar yuborish
+    statusMsg = await ctx.reply(loc.processing);
+    progressMessageId = statusMsg.message_id;
 
     // Fetch global systemPrompt from DB settings
     const settings = await db.getSettings();
@@ -2831,9 +3145,21 @@ async function runTranslation(ctx, user) {
       currentProject = await db.getProject(session.projectId);
     }
 
-    if (session.isMultiEpisode) {
-      await db.createEpisode(session.projectId, session.episodeNumber);
-    }
+    const epNum = session.isMultiEpisode ? session.episodeNumber : '1';
+    const episode = await db.createEpisode(session.projectId, epNum);
+
+    const uploadOrig = await uploadFileToChannel(session.fileName, session.fileContent, 'original_sub');
+    const uploadTrans = await uploadFileToChannel('translated_' + session.fileName, response, 'translated_sub');
+
+    episode.fileName = session.fileName;
+    episode.originalFileId = uploadOrig.fileId || null;
+    episode.originalLink = uploadOrig.link || null;
+    episode.translatedFileId = uploadTrans.fileId || null;
+    episode.translatedLink = uploadTrans.link || null;
+    episode.targetLanguage = session.targetLanguage;
+    episode.dialogueRows = requiredTokens;
+    episode.createdAt = new Date().toISOString();
+    await db.save();
 
     activeJobs = activeJobs.filter(j => j.userId !== userId.toString());
     logEvent('SUCCESS', `Successfully compiled and delivered translated subtitles to user @${ctx.from.username || userId}`);
@@ -2879,32 +3205,34 @@ async function runTranslation(ctx, user) {
     }
   } catch (err) {
     activeJobs = activeJobs.filter(j => j.userId !== userId.toString());
-    logEvent('ERROR', `Translation failed for user @${ctx.from.username || userId}: ${err.message}`);
+    // Batafsil xato faqat admin panelda ko'rinsin
+    logEvent('ERROR', `Translation failed for @${ctx.from.username || userId} [${session.fileName}]: ${err.message}`);
     await db.updateUser(userId, { state: 'IDLE', currentSession: null });
 
-    // Safe refund calculation rule: return unused line portion of original payment token balance
+    // Safe refund: sarflanmagan tokenlarni qaytarish
     const unusedLimit = requiredTokens - translatedCount;
     if (unusedLimit > 0) {
       const liveTeam = await db.getTeam(team.id);
       if (liveTeam) {
         liveTeam.tokens += unusedLimit;
         await db.save();
-        logEvent('REFUND', `Refunded ${unusedLimit} tokens to team ${liveTeam.name} due to translation interruption`);
+        logEvent('REFUND', `Refunded ${unusedLimit} tokens to team ${liveTeam.name}`);
         try {
-          await ctx.reply(`Nosozlik tufayli tarjima to'xtadi. Sarflanmagan **${unusedLimit}** ta token jamoaviy balansingizga qaytarildi!`);
-        } catch (refundErr) { }
+          await ctx.reply(`⚠️ Tarjima to'xtatildi. ${unusedLimit} ta token jamoangiz balansiga qaytarildi.`);
+        } catch (refundErr) {}
       }
     }
 
-    // Attempt to update status message to display error, otherwise reply
+    // Foydalanuvchiga sodda xabar, texnik tafsilotlar yashiriladi
+    const userFriendlyMsg = `❌ Tarjima jarayonida nosozlik yuz berdi.\n\nIltimos biroz kutib, qaytadan urinib ko'ring. Muammo davom etsa, jamoa admin bilan bog'laning.`;
     try {
       if (progressMessageId) {
-        await ctx.telegram.editMessageText(ctx.chat.id, progressMessageId, null, loc.error_occurred.replace('{error}', err.message));
+        await ctx.telegram.editMessageText(ctx.chat.id, progressMessageId, null, userFriendlyMsg);
       } else {
-        await ctx.reply(loc.error_occurred.replace('{error}', err.message));
+        await ctx.reply(userFriendlyMsg);
       }
     } catch (msgErr) {
-      await ctx.reply(loc.error_occurred.replace('{error}', err.message));
+      try { await ctx.reply(userFriendlyMsg); } catch (_) {}
     }
   }
 }
@@ -2921,9 +3249,9 @@ async function runAutomatedAnimeWorker() {
   try {
     const settings = await db.getSettings();
     if (settings.auto_download_enabled) {
-      logEvent('INFO', '[SubsPlease Worker] Checking for new anime releases...');
+      logEvent('INFO', '[Worker] Checking for new anime releases...');
       try {
-        const response = await fetch('https://subsplease.org/api/?f=latest&tz=Asia/Tashkent');
+        const response = await fetch('https://animecontent.io/api/?f=latest&tz=Asia/Tashkent');
         if (response.ok) {
           const resJson = await response.json();
           const schedule = resJson.schedule || [];
@@ -2970,7 +3298,7 @@ async function runAutomatedAnimeWorker() {
                 };
 
                 db.data.automatedAnimes.unshift(newEntry);
-                logEvent('INFO', `[SubsPlease] New airing anime detected: ${animeTitle} - Ep ${episodeNum}`);
+                logEvent('INFO', `[Anime] New airing anime detected: ${animeTitle} - Ep ${episodeNum}`);
               }
             }
           }
@@ -2982,7 +3310,7 @@ async function runAutomatedAnimeWorker() {
           await db.save();
         }
       } catch (err) {
-        logEvent('ERROR', `[SubsPlease Fetch Error] ${err.message}`);
+        logEvent('ERROR', `[Fetch Error] ${err.message}`);
       }
     }
 
@@ -3059,49 +3387,56 @@ async function uploadFileToChannel(filename, content, type) {
   let fileId = null;
   let link = null;
 
-  const s = await db.getSettings();
-  const channelId = s.storage_channel_id;
-  if (!channelId) return { fileId, link };
+  try {
+    const s = await db.getSettings();
+    const channelId = s.storage_channel_id ? String(s.storage_channel_id).trim() : null;
+    if (!channelId) {
+      logEvent('WARN', '[Storage] storage_channel_id sozlanmagan. Fayl yuklanmadi: ' + filename);
+      return { fileId, link };
+    }
 
-  if (s.telegram_account && s.telegram_account.status === 'CONNECTED' && s.telegram_account.session) {
-    try {
-      logEvent('INFO', 'GramJS orqali KATTA HAJMLI (2GB gacha) fayl yuklanmoqda: ' + filename);
-      const userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
-      if (userClient) {
-        const msg = await userClient.sendFile(channelId, {
-          file: tmpPath,
-          caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename,
-          forceDocument: true
+    if (s.telegram_account && s.telegram_account.status === 'CONNECTED' && s.telegram_account.session) {
+      try {
+        logEvent('INFO', 'GramJS orqali KATTA HAJMLI (2GB gacha) fayl yuklanmoqda: ' + filename);
+        const userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
+        if (userClient) {
+          const msg = await userClient.sendFile(channelId, {
+            file: tmpPath,
+            caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename,
+            forceDocument: true
+          });
+          fileId = msg.id;
+          link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.id;
+          await userClient.disconnect();
+          return { fileId, link };
+        }
+      } catch (e) {
+        console.error('GramJS upload error:', e.message);
+        logEvent('ERROR', "GramJS orqali yuklashda xato, Telegrafga o'tilmoqda. xato: " + e.message);
+      }
+    }
+
+    if (activeBotInstance) {
+      try {
+        const msg = await activeBotInstance.telegram.sendDocument(channelId, {
+          source: tmpPath,
+          filename: filename
+        }, {
+          caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename + "\n@" + (activeBotInstance.botInfo?.username || 'sub_trans_bot')
         });
-        fileId = msg.id;
-        link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.id;
-        await userClient.disconnect();
-        return { fileId, link };
+        fileId = msg.document.file_id;
+        const cleanChan = channelId.replace('@', '');
+        if (channelId.startsWith('@')) {
+          link = 'https://t.me/' + cleanChan + '/' + msg.message_id;
+        } else {
+          link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.message_id;
+        }
+      } catch (e) {
+        console.error('Telegram upload error:', e.message);
       }
-    } catch (e) {
-      console.error('GramJS upload error:', e.message);
-      logEvent('ERROR', "GramJS orqali yuklashda xato, Telegrafga o'tilmoqda. xato: " + e.message);
     }
-  }
-
-  if (activeBotInstance) {
-    try {
-      const msg = await activeBotInstance.telegram.sendDocument(channelId, {
-        source: tmpPath,
-        filename: filename
-      }, {
-        caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename + "\n@" + (activeBotInstance.botInfo?.username || 'sub_trans_bot')
-      });
-      fileId = msg.document.file_id;
-      const cleanChan = channelId.replace('@', '');
-      if (channelId.startsWith('@')) {
-        link = 'https://t.me/' + cleanChan + '/' + msg.message_id;
-      } else {
-        link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.message_id;
-      }
-    } catch (e) {
-      console.error('Telegram upload error:', e.message);
-    }
+  } finally {
+    await fs.unlink(tmpPath).catch(() => {});
   }
 
   return { fileId, link };
