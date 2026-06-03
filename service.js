@@ -427,6 +427,11 @@ export async function translateSubtitles({
                           errMsg.includes('API key not valid') || 
                           errMsg.includes('invalid API key') || 
                           errMsg.includes('key not found') ||
+                          errMsg.includes('401') ||
+                          errMsg.includes('UNAUTHENTICATED') ||
+                          errMsg.includes('ACCOUNT_STATE_INVALID') ||
+                          errMsg.includes('deleted or disabled') ||
+                          errMsg.includes('service account') ||
                           (errMsg.includes('API key') && (errMsg.includes('invalid') || errMsg.includes('expired')));
 
         const state = getKeyState(currentKey);

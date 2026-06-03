@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import os from 'os';
+import crypto from 'crypto';
 import { Telegraf, Markup } from 'telegraf';
 import express from 'express';
 import { sendCode, verifyCode, verify2fa, startQrLogin, getQrStatus, cancelQrLogin, verifyQr2fa } from './telegram_auth.js';
@@ -3042,6 +3043,21 @@ async function editMessageLanguageKeyboard(ctx) {
   ]));
 }
 
+async function checkFileExistsInChannel(channelId, messageId, ctx) {
+  try {
+    const testMsg = await ctx.telegram.forwardMessage(channelId, channelId, messageId);
+    if (testMsg && testMsg.message_id) {
+      try {
+        await ctx.telegram.deleteMessage(channelId, testMsg.message_id);
+      } catch (e) {}
+      return true;
+    }
+  } catch (err) {
+    // Message not found or cannot be forwarded
+  }
+  return false;
+}
+
 async function runTranslation(ctx, user) {
   const loc = getLocaleByCtx(ctx);
   const userId = ctx.from.id;
@@ -3060,13 +3076,37 @@ async function runTranslation(ctx, user) {
   // Parse lines and compute required tokens based on untranslated remaining lines
   let totalDialoguesCount = 0;
   let requiredTokens = 0;
+  let fileHash = '';
   try {
     const { getRemainingTokenCount } = await import('./service.js');
-    const { total, remaining } = getRemainingTokenCount(session.fileContent, session.fileExt, session.targetLanguage);
-    totalDialoguesCount = total;
-    requiredTokens = remaining;
+    const res = getRemainingTokenCount(session.fileContent, session.fileExt, session.targetLanguage);
+    totalDialoguesCount = res.total;
+    requiredTokens = res.remaining;
+    fileHash = res.fileHash;
   } catch (err) {
     return ctx.reply("Subtitr faylini tahlil qilishda xatolik yuz berdi.");
+  }
+
+  // Verification of resume file existence in storage channel
+  if (requiredTokens < totalDialoguesCount) {
+    db.data.translationCacheMetadata = db.data.translationCacheMetadata || {};
+    const meta = db.data.translationCacheMetadata[fileHash];
+    let isResumeValid = false;
+    if (meta && meta.messageId && meta.targetLanguage === session.targetLanguage) {
+      const channelId = team.storage_channel_id || (await db.getSettings()).storage_channel_id;
+      if (channelId) {
+        isResumeValid = await checkFileExistsInChannel(String(channelId).trim(), meta.messageId, ctx);
+      }
+    }
+    if (!isResumeValid) {
+      logEvent('WARNING', `Resume kesh topildi, lekin chala tarjima fayli storage kanalda topilmadi. Tarjima yangidan boshlanadi.`);
+      db.data.translationCache = (db.data.translationCache || []).filter(
+        entry => entry.fileHash !== fileHash || entry.targetLanguage !== session.targetLanguage
+      );
+      delete db.data.translationCacheMetadata[fileHash];
+      await db.save();
+      requiredTokens = totalDialoguesCount;
+    }
   }
 
   if (team.tokens < requiredTokens) {
@@ -3259,6 +3299,52 @@ async function runTranslation(ctx, user) {
     // Batafsil xato faqat admin panelda ko'rinsin
     logEvent('ERROR', `Translation failed for @${ctx.from.username || userId} [${session.fileName}]: ${err.message}`);
     await db.updateUser(userId, { state: 'IDLE', currentSession: null });
+
+    // Upload partial subtitles to channel if some lines were translated
+    try {
+      const { parseSubtitles, rebuildSubtitles } = await import('./service.js');
+      const parsedObj = parseSubtitles(session.fileContent, session.fileExt);
+      const computedHash = crypto.createHash('sha256').update(session.fileContent).digest('hex');
+      
+      db.data.translationCache = db.data.translationCache || [];
+      const cachedEntries = db.data.translationCache.filter(
+        entry => entry.fileHash === computedHash && entry.targetLanguage === session.targetLanguage
+      );
+      
+      if (cachedEntries.length > 0) {
+        const cacheMap = new Map();
+        for (const entry of cachedEntries) {
+          cacheMap.set(`${entry.lineIndex}_${entry.originalText}`, entry.translatedText);
+        }
+        
+        const dialogues = parsedObj.filter(l => l.isDialogue);
+        for (let i = 0; i < dialogues.length; i++) {
+          const d = dialogues[i];
+          const cachedVal = cacheMap.get(`${i}_${d.cleanText}`);
+          if (cachedVal) {
+            d.translatedText = cachedVal;
+          }
+        }
+        
+        const partialSub = rebuildSubtitles(parsedObj, session.fileExt);
+        const uploadRes = await uploadFileToChannel('partial_' + session.fileName, partialSub, 'partial_sub');
+        if (uploadRes.fileId && uploadRes.link) {
+          const linkParts = uploadRes.link.split('/');
+          const messageId = parseInt(linkParts[linkParts.length - 1]);
+          db.data.translationCacheMetadata = db.data.translationCacheMetadata || {};
+          db.data.translationCacheMetadata[computedHash] = {
+            fileId: uploadRes.fileId,
+            link: uploadRes.link,
+            messageId: messageId,
+            targetLanguage: session.targetLanguage
+          };
+          await db.save();
+          logEvent('INFO', `Uploaded partial translation to channel: ${uploadRes.link}`);
+        }
+      }
+    } catch (partialErr) {
+      console.error('Failed to compile or upload partial translation:', partialErr);
+    }
 
     // Safe refund: sarflanmagan tokenlarni qaytarish
     const unusedLimit = totalDialoguesCount - translatedCount;

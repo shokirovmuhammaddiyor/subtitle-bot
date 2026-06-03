@@ -611,6 +611,7 @@ export default function App() {
   const [botToken, setBotToken] = useState('');
   const [apiKeys, setApiKeys] = useState<string[]>(['']);
   const [aiModel, setAiModel] = useState('gemini-2.0-flash');
+  const [isCustomModel, setIsCustomModel] = useState(false);
   const [defaultBatchSize, setDefaultBatchSize] = useState('45');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [cardNumber, setCardNumber] = useState('');
@@ -1098,7 +1099,20 @@ export default function App() {
         setPackages(data.packages || []);
         setTelegramApiId(data.telegramApiId || '');
         setTelegramApiHash(data.telegramApiHash || '');
-        setAiModel(data.aiModel || 'gemini-2.0-flash');
+        const loadedModel = data.aiModel || 'gemini-2.0-flash';
+        setAiModel(loadedModel);
+        const standardModels = [
+          'gemini-2.5-flash',
+          'gemini-2.5-flash-lite-preview-06-17',
+          'gemini-2.0-flash',
+          'gemini-2.5-flash-preview-05-20',
+          'gemma-3-27b-it'
+        ];
+        if (!standardModels.includes(loadedModel)) {
+          setIsCustomModel(true);
+        } else {
+          setIsCustomModel(false);
+        }
       }
     } catch (e) { }
   };
@@ -1874,17 +1888,48 @@ export default function App() {
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">AI Model</label>
-                            <select
-                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
-                              value={aiModel}
-                              onChange={(e) => setAiModel(e.target.value)}
-                            >
-                              <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                              <option value="gemini-2.5-flash-lite-preview-06-17">gemini-2.5-flash-lite</option>
-                              <option value="gemini-2.0-flash">gemini-2.0-flash (Default)</option>
-                              <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview</option>
-                              <option value="gemma-3-27b-it">gemma-3-27b-it</option>
-                            </select>
+                            {!isCustomModel ? (
+                              <select
+                                className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono cursor-pointer"
+                                value={aiModel}
+                                onChange={(e) => {
+                                  if (e.target.value === 'custom') {
+                                    setIsCustomModel(true);
+                                    setAiModel('');
+                                  } else {
+                                    setAiModel(e.target.value);
+                                  }
+                                }}
+                              >
+                                <option value="gemini-2.0-flash">gemini-2.0-flash (Default)</option>
+                                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                                <option value="gemini-2.5-flash-lite-preview-06-17">gemini-2.5-flash-lite</option>
+                                <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview</option>
+                                <option value="gemma-3-27b-it">gemma-3-27b-it</option>
+                                <option value="custom">✍️ Boshqa (Custom Model)...</option>
+                              </select>
+                            ) : (
+                              <div className="flex gap-1.5">
+                                <input
+                                  type="text"
+                                  placeholder="Model nomini yozing..."
+                                  className="flex-1 bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                                  value={aiModel}
+                                  onChange={(e) => setAiModel(e.target.value)}
+                                  required
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsCustomModel(false);
+                                    setAiModel('gemini-2.0-flash');
+                                  }}
+                                  className="px-2 bg-slate-850 hover:bg-slate-750 text-slate-400 border border-slate-800 rounded text-[10px] uppercase font-bold tracking-wider cursor-pointer duration-150 shrink-0"
+                                >
+                                  Ro'yxat
+                                </button>
+                              </div>
+                            )}
                           </div>
                           <div>
                             <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Default Batch Size (Lines/Req)</label>
