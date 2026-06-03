@@ -781,6 +781,33 @@ export default function App() {
     setQrStatus('');
   };
 
+  const handleQrVerify2fa = async () => {
+    if (!qrSessionId || !telegramPassword) return;
+    setTelegramLoading(true);
+    setTelegramError('');
+    try {
+      const res = await fetch('/api/admin/telegram-client/qr-verify-2fa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: qrSessionId, password: telegramPassword })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setQrSessionId(null);
+        setQrUrl('');
+        setQrStatus('');
+        setTelegramPassword('');
+        await fetchTelegramStatus();
+      } else {
+        setTelegramError(data.error || '2FA paroli xato');
+      }
+    } catch (err: any) {
+      setTelegramError(err.message);
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!qrSessionId) return;
 
@@ -794,10 +821,13 @@ export default function App() {
         if (data.status === 'SCANNING' || data.status === 'WAITING_QR') {
           setQrUrl(data.qrUrl || '');
           setQrStatus(data.status);
+        } else if (data.status === 'NEEDS_2FA') {
+          setQrStatus(data.status);
         } else if (data.status === 'CONNECTED') {
           setQrSessionId(null);
           setQrUrl('');
           setQrStatus('');
+          setTelegramPassword('');
           await fetchTelegramStatus();
         } else if (data.status === 'ERROR') {
           setTelegramError(data.error || 'QR kod skanerlashda xatolik yuz berdi');
@@ -2012,28 +2042,56 @@ export default function App() {
                             <div className="space-y-3 pt-2">
                               {qrSessionId ? (
                                 <div className="flex flex-col items-center justify-center p-4 bg-slate-950 border border-slate-800 rounded-lg space-y-3 text-center">
-                                  {qrUrl ? (
-                                    <div className="p-3 bg-white rounded-lg shadow-lg shadow-sky-500/10">
-                                      <img
-                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrUrl)}`}
-                                        alt="Telegram Login QR Code"
-                                        className="w-[180px] h-[180px]"
-                                      />
+                                  {qrStatus === 'NEEDS_2FA' ? (
+                                    <div className="w-full space-y-3 text-left">
+                                      <div className="text-xs text-amber-500 font-mono">
+                                        QR kod skanerlandi. Akkaunt 2FA paroli bilan himoyalangan. Parolingizni kiriting:
+                                      </div>
+                                      <div>
+                                        <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">2FA Paroli</label>
+                                        <input
+                                          type="password"
+                                          className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                                          placeholder="2FA parolini kiriting"
+                                          value={telegramPassword}
+                                          onChange={(e) => setTelegramPassword(e.target.value)}
+                                        />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        disabled={telegramLoading}
+                                        onClick={handleQrVerify2fa}
+                                        className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 px-3.5 py-1.5 text-xs font-bold rounded cursor-pointer uppercase transition-colors"
+                                      >
+                                        {telegramLoading ? 'Tasdiqlanmoqda...' : 'Tasdiqlash'}
+                                      </button>
                                     </div>
                                   ) : (
-                                    <div className="w-[180px] h-[180px] flex items-center justify-center bg-slate-900 border border-slate-800 rounded-lg">
-                                      <div className="w-6 h-6 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
-                                    </div>
+                                    <>
+                                      {qrUrl ? (
+                                        <div className="p-3 bg-white rounded-lg shadow-lg shadow-sky-500/10">
+                                          <img
+                                            src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrUrl)}`}
+                                            alt="Telegram Login QR Code"
+                                            className="w-[180px] h-[180px]"
+                                          />
+                                        </div>
+                                      ) : (
+                                        <div className="w-[180px] h-[180px] flex items-center justify-center bg-slate-900 border border-slate-800 rounded-lg">
+                                          <div className="w-6 h-6 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" />
+                                        </div>
+                                      )}
+                                      <div className="space-y-1">
+                                        <div className="text-xs font-bold text-sky-400 font-sans">Telegram ilovangizdan skanerlang</div>
+                                        <div className="text-[10px] text-slate-400 leading-normal font-sans">
+                                          Sozlamalar &gt; Qurilmalar &gt; Qurilmani ulash bo'limiga o'ting va ushbu QR kodni skanerlang.
+                                        </div>
+                                        <div className="text-[10px] text-amber-400 animate-pulse pt-1 font-mono">
+                                          Holat: {qrStatus === 'SCANNING' ? 'Skanerlanishi kutilmoqda...' : 'QR kod tayyorlanmoqda...'}
+                                        </div>
+                                      </div>
+                                    </>
                                   )}
-                                  <div className="space-y-1">
-                                    <div className="text-xs font-bold text-sky-400 font-sans">Telegram ilovangizdan skanerlang</div>
-                                    <div className="text-[10px] text-slate-400 leading-normal font-sans">
-                                      Sozlamalar &gt; Qurilmalar &gt; Qurilmani ulash bo'limiga o'ting va ushbu QR kodni skanerlang.
-                                    </div>
-                                    <div className="text-[10px] text-amber-400 animate-pulse pt-1 font-mono">
-                                      Holat: {qrStatus === 'SCANNING' ? 'Skanerlanishi kutilmoqda...' : 'QR kod tayyorlanmoqda...'}
-                                    </div>
-                                  </div>
                                   <button
                                     type="button"
                                     onClick={handleCancelQrLogin}

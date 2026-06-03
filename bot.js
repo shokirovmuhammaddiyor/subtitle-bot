@@ -4,7 +4,7 @@ dotenv.config();
 import os from 'os';
 import { Telegraf, Markup } from 'telegraf';
 import express from 'express';
-import { sendCode, verifyCode, verify2fa, startQrLogin, getQrStatus, cancelQrLogin } from './telegram_auth.js';
+import { sendCode, verifyCode, verify2fa, startQrLogin, getQrStatus, cancelQrLogin, verifyQr2fa } from './telegram_auth.js';
 import { getConnectedClient } from './get_client.mjs';
 import yaml from 'js-yaml';
 import fs from 'fs/promises';
@@ -1316,6 +1316,29 @@ app.post('/api/admin/telegram-client/qr-cancel', async (req, res) => {
     if (!id) return res.status(400).json({ error: 'Session ID talab qilinadi' });
     await cancelQrLogin(id);
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/telegram-client/qr-verify-2fa', async (req, res) => {
+  try {
+    const { id, password } = req.body;
+    if (!id || !password) return res.status(400).json({ error: 'Session ID va parolni kiritish shart' });
+    const result = await verifyQr2fa(id, password);
+    const s = await db.getSettings();
+    s.telegram_account = {
+      phone: result.phone || 'QR Akkaunt',
+      status: 'CONNECTED',
+      apiId: s.telegram_account?.apiId || process.env.TELEGRAM_API_ID || '',
+      apiHash: s.telegram_account?.apiHash || process.env.TELEGRAM_API_HASH || '',
+      session: result.sessionString,
+      createdAt: Date.now()
+    };
+    await db.save();
+    logEvent('SUCCESS', 'Telegram akkaunti QR va 2FA orqali muvaffaqiyatli ulandi: ' + s.telegram_account.phone);
+    await cancelQrLogin(id); // clean up
+    res.json({ success: true, status: 'CONNECTED' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
