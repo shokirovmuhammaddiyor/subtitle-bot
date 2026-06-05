@@ -630,6 +630,60 @@ export default function App() {
   const [telegramLoading, setTelegramLoading] = useState(false);
   const [telegramError, setTelegramError] = useState('');
   const [automatedAnimes, setAutomatedAnimes] = useState<any[]>([]);
+  const [manualAnimeTitle, setManualAnimeTitle] = useState('');
+  const [manualAnimeEpisode, setManualAnimeEpisode] = useState('');
+  const [manualAnimeMagnet, setManualAnimeMagnet] = useState('');
+  const [isManualAnimeAdding, setIsManualAnimeAdding] = useState(false);
+
+  const handleTriggerAnime = async (id: string) => {
+    if (!window.confirm("Ushbu anime tarjimasini qayta boshlamoqchimisiz?")) return;
+    try {
+      const res = await fetch(`/api/admin/automated-animes/${id}/trigger`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        fetchAutomatedAnimes();
+      } else {
+        const d = await res.json();
+        alert(d.error || "Xatolik yuz berdi");
+      }
+    } catch (err: any) {
+      alert(err.message || "Xatolik yuz berdi");
+    }
+  };
+
+  const handleManualAnimeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualAnimeTitle.trim() || !manualAnimeEpisode.trim() || !manualAnimeMagnet.trim()) {
+      alert("Barcha maydonlarni to'ldiring!");
+      return;
+    }
+    setIsManualAnimeAdding(true);
+    try {
+      const res = await fetch('/api/admin/automated-animes/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: manualAnimeTitle.trim(),
+          episode: manualAnimeEpisode.trim(),
+          magnet: manualAnimeMagnet.trim()
+        })
+      });
+      if (res.ok) {
+        setManualAnimeTitle('');
+        setManualAnimeEpisode('');
+        setManualAnimeMagnet('');
+        fetchAutomatedAnimes();
+      } else {
+        const d = await res.json();
+        alert(d.error || "Qo'shishda xatolik yuz berdi");
+      }
+    } catch (err: any) {
+      alert(err.message || "Xatolik yuz berdi");
+    } finally {
+      setIsManualAnimeAdding(false);
+    }
+  };
 
   const fetchTelegramStatus = async () => {
     try {
@@ -2580,6 +2634,55 @@ export default function App() {
                         </button>
                       </div>
 
+                      {/* Manual Anime Add Form */}
+                      <form onSubmit={handleManualAnimeSubmit} className="bg-slate-950 border border-slate-850 p-3 rounded-lg space-y-2 text-xs">
+                        <div className="font-bold text-slate-300 text-[10px] uppercase tracking-wider mb-1">
+                          Manual Anime Qo'shish & Tarjima Qilish
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] text-slate-500 mb-0.5">Anime Sarlavhasi</label>
+                            <input
+                              type="text"
+                              required
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              placeholder="Dungeon Meshi"
+                              value={manualAnimeTitle}
+                              onChange={(e) => setManualAnimeTitle(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-500 mb-0.5">Epizod (Qism) Raqami</label>
+                            <input
+                              type="text"
+                              required
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              placeholder="01"
+                              value={manualAnimeEpisode}
+                              onChange={(e) => setManualAnimeEpisode(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-500 mb-0.5">Magnet Havola (Magnet Link)</label>
+                          <input
+                            type="text"
+                            required
+                            className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                            placeholder="magnet:?xt=urn:btih:..."
+                            value={manualAnimeMagnet}
+                            onChange={(e) => setManualAnimeMagnet(e.target.value)}
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={isManualAnimeAdding}
+                          className="bg-sky-500 hover:bg-sky-600 disabled:bg-slate-800 text-slate-950 font-extrabold text-[10px] px-3 py-1.5 rounded uppercase tracking-wider transition-colors cursor-pointer w-full"
+                        >
+                          {isManualAnimeAdding ? "Qo'shilmoqda..." : "Navbatga qo'shish & Boshlash"}
+                        </button>
+                      </form>
+
                       {!Array.isArray(automatedAnimes) || automatedAnimes.length === 0 ? (
                         <div className="py-8 text-center text-xs text-slate-500 font-mono">
                           Hozircha navbatda faol loyihalar yo'q. Yangi animalar chiqishlarini kutmoqda.
@@ -2623,6 +2726,17 @@ export default function App() {
                                     <span>Progress: {item.progress}%</span>
                                     <span>ETA: {item.eta}</span>
                                   </div>
+                                </div>
+                              )}
+
+                              {item.status !== 'DOWNLOADING' && item.status !== 'EXTRACTING' && item.status !== 'TRANSLATING' && item.status !== 'UPLOADING' && (
+                                <div className="flex justify-end pt-1">
+                                  <button
+                                    onClick={() => handleTriggerAnime(item.id)}
+                                    className="text-[9px] bg-slate-900 hover:bg-slate-800 text-sky-400 border border-slate-800 px-2 py-0.5 rounded font-bold cursor-pointer transition-colors"
+                                  >
+                                    🚀 Qayta ishga tushirish (Start / Retry)
+                                  </button>
                                 </div>
                               )}
                             </div>

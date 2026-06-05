@@ -444,6 +444,7 @@ Strict rules you MUST follow:
 
             // Push to cache
             db.data.translationCache.push({
+              id: `${fileHash}_${chunkItem.originalIndex}`,
               fileHash,
               lineIndex: chunkItem.originalIndex,
               originalText: chunkItem.d.cleanText,
@@ -454,7 +455,7 @@ Strict rules you MUST follow:
         }
 
         cleanupTranslationCache();
-        await db.save();
+        await db.save('translationCache');
 
         chunkSuccess = true;
       } catch (err) {

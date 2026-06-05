@@ -73,11 +73,10 @@ export class Database {
       const metaDocs = await metaCol.find({}).toArray();
       this.data.translationCacheMetadata = {};
       for (const doc of metaDocs) {
-        this.data.translationCacheMetadata[doc._id] = {
-          createdAt: doc.createdAt,
-          expiresAt: doc.expiresAt,
-          fileName: doc.fileName
-        };
+        const hash = doc._id;
+        const copy = { ...doc };
+        delete copy._id;
+        this.data.translationCacheMetadata[hash] = copy;
       }
 
       if (!this.data.settings) {
@@ -141,57 +140,66 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
     }
   }
 
-  async save() {
+  async save(dirtyCollections = null) {
     this.saveQueue = this.saveQueue.then(async () => {
       try {
         if (!this.db) return;
 
-        const collections = [
+        let collectionsToSync = [
           'users', 'projects', 'episodes', 'teams', 'payments', 
-          'ratings', 'automatedAnimes', 'promocodes', 'backups', 'translationCache'
+          'ratings', 'automatedAnimes', 'promocodes', 'backups', 'translationCache',
+          'settings', 'translationCacheMetadata'
         ];
 
-        for (const colName of collections) {
-          await this.syncCollection(colName, this.data[colName], 'id');
-        }
-
-        // Sync settings
-        if (this.data.settings) {
-          const settingsCol = this.db.collection('settings');
-          const doc = JSON.parse(JSON.stringify(this.data.settings));
-          doc._id = 'global';
-          await settingsCol.replaceOne({ _id: 'global' }, doc, { upsert: true });
-        }
-
-        // Sync translationCacheMetadata
-        const metaCol = this.db.collection('translationCacheMetadata');
-        const bulkOps = [];
-        const currentHashes = new Set();
-
-        if (this.data.translationCacheMetadata) {
-          for (const [hash, val] of Object.entries(this.data.translationCacheMetadata)) {
-            currentHashes.add(hash);
-            const doc = JSON.parse(JSON.stringify(val));
-            doc._id = hash;
-            bulkOps.push({
-              replaceOne: {
-                filter: { _id: hash },
-                replacement: doc,
-                upsert: true
-              }
-            });
+        if (dirtyCollections) {
+          if (typeof dirtyCollections === 'string') {
+            collectionsToSync = [dirtyCollections];
+          } else if (Array.isArray(dirtyCollections)) {
+            collectionsToSync = dirtyCollections;
           }
         }
 
-        if (bulkOps.length > 0) {
-          await metaCol.bulkWrite(bulkOps);
-        }
+        for (const colName of collectionsToSync) {
+          if (colName === 'settings') {
+            if (this.data.settings) {
+              const settingsCol = this.db.collection('settings');
+              const doc = JSON.parse(JSON.stringify(this.data.settings));
+              doc._id = 'global';
+              await settingsCol.replaceOne({ _id: 'global' }, doc, { upsert: true });
+            }
+          } else if (colName === 'translationCacheMetadata') {
+            const metaCol = this.db.collection('translationCacheMetadata');
+            const bulkOps = [];
+            const currentHashes = new Set();
 
-        const query = {};
-        if (currentHashes.size > 0) {
-          query._id = { $nin: Array.from(currentHashes) };
+            if (this.data.translationCacheMetadata) {
+              for (const [hash, val] of Object.entries(this.data.translationCacheMetadata)) {
+                currentHashes.add(hash);
+                const doc = JSON.parse(JSON.stringify(val));
+                doc._id = hash;
+                bulkOps.push({
+                  replaceOne: {
+                    filter: { _id: hash },
+                    replacement: doc,
+                    upsert: true
+                  }
+                });
+              }
+            }
+
+            if (bulkOps.length > 0) {
+              await metaCol.bulkWrite(bulkOps);
+            }
+
+            const query = {};
+            if (currentHashes.size > 0) {
+              query._id = { $nin: Array.from(currentHashes) };
+            }
+            await metaCol.deleteMany(query);
+          } else {
+            await this.syncCollection(colName, this.data[colName], 'id');
+          }
         }
-        await metaCol.deleteMany(query);
       } catch (err) {
         console.error('[DB WRITE ERROR] Failed to sync database to MongoDB:', err);
       }

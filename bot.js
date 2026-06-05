@@ -1482,6 +1482,87 @@ app.get('/api/admin/automated-animes'
     }
   });
 
+app.post('/api/admin/automated-animes/:id/trigger', async (req, res) => {
+  try {
+    const { id } = req.params;
+    db.data.automatedAnimes = db.data.automatedAnimes || [];
+    const item = db.data.automatedAnimes.find(a => a.id === id);
+    if (!item) {
+      return res.status(404).json({ error: "Loyiha topilmadi" });
+    }
+    item.status = 'PENDING';
+    item.progress = 0;
+    item.eta = 'Navbatda turibdi...';
+    await db.save('automatedAnimes');
+    
+    // Trigger worker in background
+    runAutomatedAnimeWorker().catch(err => console.error("Worker trigger error:", err));
+    
+    res.json({ success: true, item });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/automated-animes/add', async (req, res) => {
+  try {
+    const { title, episode, magnet } = req.body;
+    if (!title || !episode || !magnet) {
+      return res.status(400).json({ error: "Sarlavha, epizod va magnet havola kiritilishi shart" });
+    }
+    
+    db.data.automatedAnimes = db.data.automatedAnimes || [];
+    const botUsername = activeBotInstance ? activeBotInstance.botInfo?.username : 'sub_trans_bot';
+    
+    const formatFileName = (prefix, name, ep) => {
+      const botPrefix = `@${prefix || 'bot'}`;
+      const epSuffix = ` Ep ${ep}`;
+      const reserved = botPrefix.length + 1 + epSuffix.length;
+      let maxLen = 25 - reserved;
+      if (maxLen < 3) maxLen = 3;
+      const truncatedTitle = name.length > maxLen ? name.substring(0, maxLen - 2) + '..' : name;
+      return `${botPrefix} ${truncatedTitle}${epSuffix}`;
+    };
+
+    const baseName = formatFileName(botUsername, title, episode);
+    const mkvName = `${baseName}.mkv`;
+    const subName = `${baseName}.ass`;
+    
+    const newEntry = {
+      id: "auto_" + Date.now().toString(36) + "_" + Math.random().toString(36).substring(3, 8),
+      title,
+      episode,
+      page: '',
+      mkvName,
+      subName,
+      mkvFileId: null,
+      mkvLink: null,
+      subFileId: null,
+      subLink: null,
+      status: "PENDING",
+      progress: 0,
+      eta: "Navbatda turibdi...",
+      createdAt: new Date().toISOString(),
+      tracks: ["English (ASS)", "Japanese (ASS)"],
+      visible: true,
+      magnet
+    };
+    
+    db.data.automatedAnimes.unshift(newEntry);
+    db.data.automatedAnimes.forEach((item, index) => {
+      item.visible = (index < 25);
+    });
+    await db.save('automatedAnimes');
+    
+    // Trigger worker in background
+    runAutomatedAnimeWorker().catch(err => console.error("Worker trigger error:", err));
+    
+    res.json({ success: true, item: newEntry });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/subsplease', async (req, res) => {
   try {
     const queryString = new URL(req.url, 'http://localhost').search;
@@ -3745,8 +3826,14 @@ async function parseRssFeed() {
       const titleMatch = itemStr.match(/<title>([\s\S]*?)<\/title>/);
       const linkMatch = itemStr.match(/<link>([\s\S]*?)<\/link>/);
       if (titleMatch && linkMatch) {
-        const rawTitle = titleMatch[1].trim();
-        const magnet = linkMatch[1].trim().replace(/&amp;/g, '&');
+        let rawTitle = titleMatch[1].trim();
+        if (rawTitle.startsWith('<![CDATA[') && rawTitle.endsWith(']]>')) {
+          rawTitle = rawTitle.substring(9, rawTitle.length - 3).trim();
+        }
+        let magnet = linkMatch[1].trim().replace(/&amp;/g, '&');
+        if (magnet.startsWith('<![CDATA[') && magnet.endsWith(']]>')) {
+          magnet = magnet.substring(9, magnet.length - 3).trim();
+        }
         
         const titleRegex = /^\[SubsPlease\] (.*?) - (\d+(?:\.\d+)?) \((1080p|720p|480p)\)(?: \[[A-F0-9]+\])?\.mkv$/i;
         const parsedTitle = rawTitle.match(titleRegex);
@@ -3821,7 +3908,7 @@ function downloadMkvWithAria2(pendingItem, downloadDir) {
           lastProgress = progress;
           pendingItem.progress = progress;
           pendingItem.eta = `Yuklanmoqda: ${progress}% (ETA: ${eta})`;
-          await db.save();
+          await db.save('automatedAnimes');
         }
       }
     });
@@ -3871,7 +3958,14 @@ async function runAutomatedAnimeWorker() {
         const response = await fetchSubsPlease('/api/?f=schedule&h=true&tz=Asia/Tashkent');
         if (response.ok) {
           const resJson = await response.json();
-          const schedule = resJson.schedule || [];
+          let schedule = [];
+          if (resJson.schedule) {
+            if (Array.isArray(resJson.schedule)) {
+              schedule = resJson.schedule;
+            } else if (typeof resJson.schedule === 'object') {
+              schedule = Object.values(resJson.schedule).flat();
+            }
+          }
           const botUsername = activeBotInstance ? activeBotInstance.botInfo?.username : 'sub_trans_bot';
 
           const rssItems = await parseRssFeed();
@@ -3930,7 +4024,7 @@ async function runAutomatedAnimeWorker() {
           db.data.automatedAnimes.forEach((item, index) => {
             item.visible = (index < 25);
           });
-          await db.save();
+          await db.save('automatedAnimes');
         }
       } catch (err) {
         logEvent('ERROR', `[Fetch Error] ${err.message}`);
@@ -3948,7 +4042,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'DOWNLOADING';
         pendingItem.progress = 0;
         pendingItem.eta = 'Kutilmoqda...';
-        await db.save();
+        await db.save('automatedAnimes');
 
         if (!pendingItem.magnet) {
           throw new Error('Magnet link is missing in the database entry.');
@@ -3966,7 +4060,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'EXTRACTING';
         pendingItem.progress = 50;
         pendingItem.eta = 'Subtitrlar chiqarib olinmoqda...';
-        await db.save();
+        await db.save('automatedAnimes');
 
         const extractedSubPath = path.join(downloadDir, 'extracted.ass');
         await extractSubtitle(mkvPath, extractedSubPath);
@@ -3979,7 +4073,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'TRANSLATING';
         pendingItem.progress = 0;
         pendingItem.eta = 'Gemini tarjima boshlandi...';
-        await db.save();
+        await db.save('automatedAnimes');
 
         const subContent = await fs.readFile(extractedSubPath, 'utf8');
         const translatedSubContent = await translateSubtitles({
@@ -3994,7 +4088,7 @@ async function runAutomatedAnimeWorker() {
           onProgress: async ({ total, translated, eta, progressBar }) => {
             pendingItem.progress = Math.min(Math.round((translated / total) * 100), 100);
             pendingItem.eta = `Tarjima: ${translated}/${total} (${eta} qoldi)`;
-            await db.save();
+            await db.save('automatedAnimes');
           }
         });
 
@@ -4004,7 +4098,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'UPLOADING';
         pendingItem.progress = 80;
         pendingItem.eta = 'Telegramga yuklanmoqda...';
-        await db.save();
+        await db.save('automatedAnimes');
 
         logEvent('INFO', `[Upload] Uploading subtitle: ${pendingItem.subName}`);
         const uploadSubRes = await uploadFileToChannel(pendingItem.subName, translatedSubPath, 'subtitle', true);
@@ -4027,14 +4121,14 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'COMPLETED';
         pendingItem.progress = 100;
         pendingItem.eta = 'Bajarildi';
-        await db.save();
+        await db.save('automatedAnimes');
         logEvent('SUCCESS', `[Queue Worker] Finished automated pipeline for: ${pendingItem.title} - ${pendingItem.episode}`);
 
       } catch (err) {
         pendingItem.status = 'FAILED';
         pendingItem.progress = 0;
         pendingItem.eta = `Xatolik: ${err.message}`;
-        await db.save();
+        await db.save('automatedAnimes');
         logEvent('ERROR', `[Queue Worker] Pipeline failed for ${pendingItem.title} - ${pendingItem.episode}: ${err.message}`);
       } finally {
         await fs.rm(downloadDir, { recursive: true, force: true }).catch(err => {
@@ -4131,6 +4225,7 @@ async function uploadFileToChannel(filename, content, type, isFilePath = false) 
   return { fileId, link };
 }
 
+setTimeout(runAutomatedAnimeWorker, 10000);
 setInterval(runAutomatedAnimeWorker, 15 * 60 * 1000);
 
 if (process.env.BOT_TOKEN) {
