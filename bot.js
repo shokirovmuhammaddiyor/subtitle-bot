@@ -3880,16 +3880,16 @@ async function runTranslation(ctx, user) {
       }
     }
 
-    // Foydalanuvchiga sodda xabar, texnik tafsilotlar yashiriladi
-    const userFriendlyMsg = `❌ Tarjima jarayonida nosozlik yuz berdi.\n\nIltimos biroz kutib, qaytadan urinib ko'ring. Muammo davom etsa, jamoa admin bilan bog'laning.`;
+    // Foydalanuvchiga aniq xato xabarini ko'rsatish
+    const errMsgText = `❌ Tarjimada xatolik yuz berdi:\n\n${err.message}`;
     try {
       if (progressMessageId) {
-        await ctx.telegram.editMessageText(ctx.chat.id, progressMessageId, null, userFriendlyMsg);
+        await ctx.telegram.editMessageText(ctx.chat.id, progressMessageId, null, errMsgText);
       } else {
-        await ctx.reply(userFriendlyMsg);
+        await ctx.reply(errMsgText);
       }
     } catch (msgErr) {
-      try { await ctx.reply(userFriendlyMsg); } catch (_) {}
+      try { await ctx.reply(errMsgText); } catch (_) {}
     }
   }
 }

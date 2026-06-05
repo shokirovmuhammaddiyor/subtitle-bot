@@ -406,10 +406,6 @@ Strict rules you MUST follow:
         const { key: currentKey, waitTimeMs } = keyInfo;
 
         if (waitTimeMs > 0) {
-          if (waitTimeMs > 300000) { // 5 minutes
-            throw new Error(`TRANSLATION_FAILED: Barcha kiritilgan API kalitlar limitlari to'liq tugadi (kutish vaqti ${Math.ceil(waitTimeMs / 60000)} daqiqa). Iltimos, kalitlaringizni yoki to'lov balansini tekshiring.`);
-          }
-
           logger('INFO', `[KEY ROTATION] All keys blocked. Waiting ${Math.ceil(waitTimeMs / 1000)}s for the next key to unblock...`);
           // Notify progress about the wait
           await onProgress({
@@ -505,33 +501,14 @@ Strict rules you MUST follow:
             state.invalid = true;
             logger('WARNING', `[KEY ROTATION] Key marked as INVALID.`);
           } else if (is429) {
-            state.consecutiveFailures = (state.consecutiveFailures || 0) + 1;
-            let cooldownMs = 60000;
+            let cooldownMs = 15000; // 15s cooldown
             const retryMatch = errMsg.match(/"retryDelay"\s*:\s*"(\d+)s"/) || errMsg.match(/retry in (\d+(?:\.\d+)?)s/i);
             if (retryMatch) {
               const retrySeconds = Math.ceil(parseFloat(retryMatch[1]));
-              cooldownMs = Math.min(retrySeconds * 1000 + 1000, 120000);
-            } else if (
-              errMsg.includes('daily') || 
-              errMsg.includes('per day') || 
-              errMsg.includes('exceeded your current quota') || 
-              errMsg.includes('billing details') ||
-              errMsg.includes('billing account')
-            ) {
-              cooldownMs = 4 * 60 * 60 * 1000; // 4 hours for daily/billing limits
-              state.consecutiveFailures = 3; // force daily limit exhaust
-            } else {
-              cooldownMs = 60000;
+              cooldownMs = Math.min(retrySeconds * 1000 + 1000, 60000);
             }
-
-            if (state.consecutiveFailures >= 2) {
-              cooldownMs = 4 * 60 * 60 * 1000; // 4 hours cooldown
-              logger('WARNING', `[KEY ROTATION] Key marked as DAILY/BILLING LIMIT EXHAUSTED (4 hours cooldown) after ${state.consecutiveFailures} consecutive 429 failures.`);
-            } else {
-              logger('WARNING', `[KEY ROTATION] Key marked as BLOCKED for ${Math.ceil(cooldownMs / 1000)}s.`);
-            }
-
             state.blockedUntil = Date.now() + cooldownMs;
+            logger('WARNING', `[KEY ROTATION] Key marked as BLOCKED for ${Math.ceil(cooldownMs / 1000)}s.`);
           } else {
             state.blockedUntil = Date.now() + 5000;
             logger('WARNING', `[KEY ROTATION] Key temporary failure. Cooldown: 5s.`);
@@ -549,7 +526,7 @@ Strict rules you MUST follow:
 
       if (!chunkSuccess) {
         logger('ERROR', `Translation failed for chunk after ${chunkAttempts} attempts. Last error: ${lastError ? lastError.message || lastError : 'Unknown'}`);
-        throw new Error(`TRANSLATION_FAILED: Tarjima serveri band yoki barcha kalit limitlari tugadi. (Oxirgi xato: ${lastError ? lastError.message || lastError : 'Unknown'})`);
+        throw new Error(`Tarjima xatoligi: ${lastError ? lastError.message || lastError : 'Unknown'}`);
       }
 
       // Update progress
