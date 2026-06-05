@@ -829,7 +829,11 @@ async function downloadFileFromChannel(fileId, filename) {
         const peer = getGramJSPeer(s.storage_channel_id);
         const messages = await userClient.getMessages(peer, { ids: [Number(fileId)] });
         if (messages && messages[0] && messages[0].media) {
-          const buffer = await userClient.downloadMedia(messages[0].media);
+          const downloadPromise = userClient.downloadMedia(messages[0].media);
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("GramJS yuklab olish vaqti tugadi (5 daqiqa cheklov).")), 5 * 60 * 1000)
+          );
+          const buffer = await Promise.race([downloadPromise, timeoutPromise]);
           return buffer;
         }
       }
@@ -4292,11 +4296,18 @@ async function uploadFileToChannel(filename, content, type, isFilePath = false) 
         userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
         if (userClient) {
           const peer = getGramJSPeer(channelId);
-          const msg = await userClient.sendFile(peer, {
+          const uploadPromise = userClient.sendFile(peer, {
             file: tmpPath,
             caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename,
             forceDocument: true
           });
+
+          // 12 minutes upload timeout to prevent background process hanging forever on connection loss
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("GramJS yuklash vaqti tugadi (12 daqiqa cheklov).")), 12 * 60 * 1000)
+          );
+
+          const msg = await Promise.race([uploadPromise, timeoutPromise]);
           fileId = msg.id;
           if (channelId.startsWith('@')) {
             link = 'https://t.me/' + channelId.substring(1) + '/' + msg.id;
