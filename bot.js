@@ -16,6 +16,38 @@ import { promisify } from 'util';
 const execPromise = promisify(exec);
 import { translateSubtitles, resetAi, setLogger } from './service.js';
 
+function getCleanChannelId(channelId) {
+  if (!channelId) return null;
+  let cid = String(channelId).trim();
+  if (cid.startsWith('@')) {
+    return cid;
+  }
+  cid = cid.replace(/\s+/g, '');
+  if (/^\d+$/.test(cid)) {
+    return '-100' + cid;
+  }
+  if (/^-\d+$/.test(cid) && !cid.startsWith('-100')) {
+    return '-100' + cid.substring(1);
+  }
+  return cid;
+}
+
+function getGramJSPeer(channelId) {
+  const cleanId = getCleanChannelId(channelId);
+  if (!cleanId) return null;
+  if (cleanId.startsWith('@')) {
+    return cleanId;
+  }
+  if (!isNaN(cleanId)) {
+    try {
+      return BigInt(cleanId);
+    } catch (e) {
+      return Number(cleanId);
+    }
+  }
+  return cleanId;
+}
+
 let systemLogs = [
   { time: new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }), type: 'INFO', message: 'SubTrans AI Architect engine initialized.' }
 ];
@@ -235,7 +267,7 @@ setInterval(runBackupProcedure, 4 * 60 * 60 * 1000);
 async function runCloudBackupProcedure() {
   try {
     const s = await db.getSettings();
-    const channelId = s.storage_channel_id;
+    const channelId = getCleanChannelId(s.storage_channel_id);
     if (!channelId || !activeBotInstance) return;
 
     // Serialize live state
@@ -719,21 +751,25 @@ async function downloadFileFromChannel(fileId, filename) {
   
   // If it's numeric, it is a GramJS message ID in the channel
   if (fileId && !isNaN(fileId) && s.telegram_account && s.telegram_account.status === 'CONNECTED' && s.telegram_account.session) {
+    let userClient = null;
     try {
       logEvent('INFO', 'GramJS orqali fayl yuklab olinmoqda: ' + filename + ' (ID: ' + fileId + ')');
-      const userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
+      userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
       if (userClient) {
-        const messages = await userClient.getMessages(s.storage_channel_id, { ids: [Number(fileId)] });
+        const peer = getGramJSPeer(s.storage_channel_id);
+        const messages = await userClient.getMessages(peer, { ids: [Number(fileId)] });
         if (messages && messages[0] && messages[0].media) {
           const buffer = await userClient.downloadMedia(messages[0].media);
-          await userClient.disconnect();
           return buffer;
         }
-        await userClient.disconnect();
       }
     } catch (e) {
       console.error('GramJS download error:', e.message);
       logEvent('ERROR', "GramJS orqali yuklab olishda xatolik: " + e.message);
+    } finally {
+      if (userClient) {
+        await userClient.disconnect().catch(() => {});
+      }
     }
   }
 
@@ -2355,7 +2391,7 @@ function setupBotHandlers(bot) {
           const settings = await db.getSettings();
           if (typeof item.mkvFileId === 'number' || (typeof item.mkvFileId === 'string' && !isNaN(item.mkvFileId) && item.mkvFileId.length < 15)) {
             // It's a message ID from GramJS
-            await ctx.telegram.copyMessage(ctx.chat.id, settings.storage_channel_id, Number(item.mkvFileId), {
+            await ctx.telegram.copyMessage(ctx.chat.id, getCleanChannelId(settings.storage_channel_id), Number(item.mkvFileId), {
               caption: `🎬 [MKV Video] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
             });
           } else {
@@ -2392,7 +2428,7 @@ function setupBotHandlers(bot) {
             const settings = await db.getSettings();
             if (typeof item.subFileId === 'number' || (typeof item.subFileId === 'string' && !isNaN(item.subFileId) && item.subFileId.length < 15)) {
               // It's a message ID from GramJS
-              await ctx.telegram.copyMessage(ctx.chat.id, settings.storage_channel_id, Number(item.subFileId), {
+              await ctx.telegram.copyMessage(ctx.chat.id, getCleanChannelId(settings.storage_channel_id), Number(item.subFileId), {
                 caption: `📝 [O'ZBEKCHA: ${trackName}] @${ctx.botInfo.username}\n${item.title} - Ep ${item.episode}`
               });
             } else {
@@ -3088,10 +3124,11 @@ async function editMessageLanguageKeyboard(ctx) {
 
 async function checkFileExistsInChannel(channelId, messageId, ctx) {
   try {
-    const testMsg = await ctx.telegram.forwardMessage(channelId, channelId, messageId);
+    const cleanChannelId = getCleanChannelId(channelId);
+    const testMsg = await ctx.telegram.forwardMessage(cleanChannelId, cleanChannelId, messageId);
     if (testMsg && testMsg.message_id) {
       try {
-        await ctx.telegram.deleteMessage(channelId, testMsg.message_id);
+        await ctx.telegram.deleteMessage(cleanChannelId, testMsg.message_id);
       } catch (e) {}
       return true;
     }
@@ -3768,30 +3805,40 @@ async function uploadFileToChannel(filename, content, type, isFilePath = false) 
 
   try {
     const s = await db.getSettings();
-    const channelId = s.storage_channel_id ? String(s.storage_channel_id).trim() : null;
+    const rawChannelId = s.storage_channel_id ? String(s.storage_channel_id).trim() : null;
+    const channelId = getCleanChannelId(rawChannelId);
     if (!channelId) {
       logEvent('WARN', '[Storage] storage_channel_id sozlanmagan. Fayl yuklanmadi: ' + filename);
       return { fileId, link };
     }
 
     if (s.telegram_account && s.telegram_account.status === 'CONNECTED' && s.telegram_account.session) {
+      let userClient = null;
       try {
         logEvent('INFO', 'GramJS orqali KATTA HAJMLI (2GB gacha) fayl yuklanmoqda: ' + filename);
-        const userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
+        userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
         if (userClient) {
-          const msg = await userClient.sendFile(channelId, {
+          const peer = getGramJSPeer(channelId);
+          const msg = await userClient.sendFile(peer, {
             file: tmpPath,
             caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename,
             forceDocument: true
           });
           fileId = msg.id;
-          link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.id;
-          await userClient.disconnect();
+          if (channelId.startsWith('@')) {
+            link = 'https://t.me/' + channelId.substring(1) + '/' + msg.id;
+          } else {
+            link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.id;
+          }
           return { fileId, link };
         }
       } catch (e) {
         console.error('GramJS upload error:', e.message);
         logEvent('ERROR', "GramJS orqali yuklashda xato, Telegrafga o'tilmoqda. xato: " + e.message);
+      } finally {
+        if (userClient) {
+          await userClient.disconnect().catch(() => {});
+        }
       }
     }
 
@@ -3804,14 +3851,14 @@ async function uploadFileToChannel(filename, content, type, isFilePath = false) 
           caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename + "\n@" + (activeBotInstance.botInfo?.username || 'sub_trans_bot')
         });
         fileId = msg.document.file_id;
-        const cleanChan = channelId.replace('@', '');
         if (channelId.startsWith('@')) {
-          link = 'https://t.me/' + cleanChan + '/' + msg.message_id;
+          link = 'https://t.me/' + channelId.substring(1) + '/' + msg.message_id;
         } else {
           link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.message_id;
         }
       } catch (e) {
         console.error('Telegram upload error:', e.message);
+        logEvent('ERROR', "Telegraf orqali yuklashda xato: " + e.message);
       }
     }
   } finally {
