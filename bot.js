@@ -149,6 +149,11 @@ const loadAllLocales = async () => {
 
 await loadAllLocales();
 
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return String(text).replace(/([*_`\[])/g, '\\$1');
+}
+
 function getLocaleByCtx(ctx) {
   const userId = ctx?.from?.id;
   let userLang = 'uz';
@@ -1809,7 +1814,7 @@ function setupBotHandlers(bot) {
       return ctx.reply(blockedText);
     }
 
-    const teamNameStr = team.name || 'Noma\'lum';
+    const teamNameStr = escapeMarkdown(team.name || 'Noma\'lum');
     const tokensCount = team.tokens !== undefined ? team.tokens : 0;
     const menuTitle = (loc.team_menu_title || "📋 Jamoa Boshqaruv Paneli:\n\nJamoa: *{team_name}*\nKod: `{team_id}`\nBalans: *{tokens}* Token")
       .replace('{team_name}', teamNameStr)
@@ -2088,23 +2093,145 @@ function setupBotHandlers(bot) {
     }
   });
 
+  async function requestToJoinTeam(ctx, teamCode, userId) {
+    const loc = getLocaleByCtx(ctx);
+    const team = await db.getTeam(teamCode);
+    const user = await db.getUser(userId);
+
+    if (!team) {
+      return ctx.reply("Jamoa topilmadi.");
+    }
+
+    if (user.teamId) {
+      if (user.teamId === team.id) {
+        await ctx.reply(`Siz allaqachon Ushbu "${team.name}" jamoasi azosisiz!`);
+        return sendTeamMenu(ctx, user);
+      } else {
+        return ctx.reply("Siz allaqachon boshqa jamoa a'zosisiz! Avval u jamoadan chiqishingiz kerak.");
+      }
+    }
+
+    // Initialize pendingRequests if not exists
+    team.pendingRequests = team.pendingRequests || [];
+
+    if (team.pendingRequests.includes(userId)) {
+      return ctx.reply(`Sizning "${team.name}" jamoasiga qo'shilish so'rovingiz allaqachon jamoa rahbariga yuborilgan. Iltimos kuting! ⏳`);
+    }
+
+    team.pendingRequests.push(userId);
+    await db.save();
+
+    // Notify requesting user
+    await ctx.reply(`Sizning "${team.name}" jamoasiga qo'shilish so'rovingiz jamoa rahbariga yuborildi. Iltimos, u tasdiqlashini kuting! ⏳`);
+
+    // Notify owner
+    const ownerId = team.ownerId;
+    if (ownerId) {
+      try {
+        const usernameLabel = ctx.from.username ? `@${ctx.from.username}` : `Foydalanuvchi #${userId}`;
+        const nameLabel = ctx.from.first_name || 'Foydalanuvchi';
+        
+        await ctx.telegram.sendMessage(ownerId, 
+          `🔔 *Jamoaga qo'shilish so'rovi!*\n\n` +
+          `• Foydalanuvchi: *${escapeMarkdown(nameLabel)}* (${escapeMarkdown(usernameLabel)}, ID: \`${userId}\`)\n` +
+          `• Jamoa: *${escapeMarkdown(team.name)}* (Kod: \`${team.id}\`)\n\n` +
+          `Ushbu foydalanuvchini jamoangizga qo'shishni tasdiqlaysizmi?`, {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+              [
+                Markup.button.callback("✅ Tasdiqlash", `joinreq_accept_${userId}_${team.id}`),
+                Markup.button.callback("❌ Rad etish", `joinreq_reject_${userId}_${team.id}`)
+              ]
+            ])
+          }
+        );
+      } catch (err) {
+        console.error("Failed to send join request notification to owner:", err);
+      }
+    }
+  }
+
   bot.action(/join_confirm_(.+)/, async (ctx) => {
     try {
-      const loc = getLocaleByCtx(ctx);
       await ctx.answerCbQuery();
       const code = ctx.match[1];
-      const team = await db.addUserToTeam(code, ctx.from.id);
-      const user = await db.getUser(ctx.from.id);
-      const successText = (loc.joined_success || "Siz '{team_name}' jamoasiga ulandingiz!")
-        .replace('{team_name}', team.name);
+      const userId = ctx.from.id;
+      await requestToJoinTeam(ctx, code, userId);
       try {
-        await ctx.editMessageText(successText);
-      } catch (err) {
-        await ctx.reply(successText);
-      }
-      await sendTeamMenu(ctx, user);
+        await ctx.deleteMessage();
+      } catch (e) {}
     } catch (err) {
       console.error(err);
+    }
+  });
+
+  bot.action(/joinreq_accept_(\d+)_(.+)/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const userId = Number(ctx.match[1]);
+      const teamCode = ctx.match[2];
+      
+      const team = await db.getTeam(teamCode);
+      if (!team) {
+        return ctx.editMessageText("⚠️ Jamoa topilmadi.");
+      }
+      
+      if (team.ownerId !== ctx.from.id) {
+        return ctx.reply("Siz jamoa rahbari emassiz!");
+      }
+      
+      const targetUser = await db.getUser(userId);
+      if (targetUser.teamId) {
+        team.pendingRequests = (team.pendingRequests || []).filter(id => id !== userId);
+        await db.save();
+        return ctx.editMessageText("⚠️ Bu foydalanuvchi allaqachon boshqa jamoaga qo'shilgan.");
+      }
+      
+      team.pendingRequests = (team.pendingRequests || []).filter(id => id !== userId);
+      await db.addUserToTeam(teamCode, userId);
+      
+      const targetNameLabel = targetUser.username ? `@${targetUser.username}` : `Foydalanuvchi #${userId}`;
+      await ctx.editMessageText(`✅ *${escapeMarkdown(targetNameLabel)}* jamoangizga muvaffaqiyatli qo'shildi!`, { parse_mode: 'Markdown' });
+      
+      try {
+        await ctx.telegram.sendMessage(userId, `🎉 Jamoa rahbari so'rovingizni tasdiqladi! Siz '${team.name}' jamoasiga muvaffaqiyatli ulandingiz.`);
+      } catch (err) {
+        console.error("Failed to notify accepted user:", err);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  bot.action(/joinreq_reject_(\d+)_(.+)/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const userId = Number(ctx.match[1]);
+      const teamCode = ctx.match[2];
+      
+      const team = await db.getTeam(teamCode);
+      if (!team) {
+        return ctx.editMessageText("⚠️ Jamoa topilmadi.");
+      }
+      
+      if (team.ownerId !== ctx.from.id) {
+        return ctx.reply("Siz jamoa rahbari emassiz!");
+      }
+      
+      team.pendingRequests = (team.pendingRequests || []).filter(id => id !== userId);
+      await db.save();
+      
+      const targetUser = await db.getUser(userId);
+      const targetNameLabel = targetUser.username ? `@${targetUser.username}` : `Foydalanuvchi #${userId}`;
+      await ctx.editMessageText(`❌ *${escapeMarkdown(targetNameLabel)}* ning jamoaga qo'shilish so'rovi rad etildi.`, { parse_mode: 'Markdown' });
+      
+      try {
+        await ctx.telegram.sendMessage(userId, `❌ Sizning '${team.name}' jamoasiga qo'shilish so'rovingiz rad etildi.`);
+      } catch (err) {
+        console.error("Failed to notify rejected user:", err);
+      }
+    } catch (e) {
+      console.error(e);
     }
   });
 
@@ -2461,21 +2588,22 @@ function setupBotHandlers(bot) {
     }
   });
 
-  async function sendTeamMembersMenu(ctx, user) {
+  async function sendTeamMembersMenu(ctx, user, edit = true) {
     const team = await db.getTeam(user.teamId);
     if (!team) return;
 
-    let msgText = `👥 *${team.name}* Jamoasi A'zolari:\n\n`;
+    let msgText = `👥 *${escapeMarkdown(team.name)}* Jamoasi A'zolari:\n\n`;
     const buttons = [];
 
     for (const memberId of team.members) {
       const mUser = await db.getUser(memberId);
       const nameLabel = mUser.username ? `@${mUser.username}` : `Foydalanuvchi #${mUser.id}`;
+      const escapedNameLabel = escapeMarkdown(nameLabel);
 
       if (memberId === team.ownerId) {
-        msgText += `👑 *Administrator:* ${nameLabel}\n`;
+        msgText += `👑 *Administrator:* ${escapedNameLabel}\n`;
       } else {
-        msgText += `• *A'zo:* ${nameLabel}\n`;
+        msgText += `• *A'zo:* ${escapedNameLabel}\n`;
         if (user.id === team.ownerId) {
           // Owner can manage other users
           buttons.push([
@@ -2491,9 +2619,23 @@ function setupBotHandlers(bot) {
     const inviteUrl = `https://t.me/${botInfo.username}?start=invite_${team.id}`;
     msgText += `\n🔗 *Taklif Havolasi:* \`${inviteUrl}\` (Boshqalarni qo'shish uchun shu havolani jo'nating)`;
 
+    // Extra action buttons row
+    const actionRow = [];
+    if (user.id === team.ownerId) {
+      actionRow.push(Markup.button.callback("👑 Ownerlikni o'tkazish (ID)", 'action_transfer_owner'));
+    }
+    actionRow.push(Markup.button.callback("🚪 Jamoadan Chiqish", 'action_leave_team'));
+    buttons.push(actionRow);
+
     buttons.push([Markup.button.callback("⬅️ Orqaga", 'back_to_menu')]);
 
-    await ctx.editMessageText(msgText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+    if (edit && ctx.callbackQuery) {
+      try {
+        await ctx.editMessageText(msgText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+        return;
+      } catch (err) {}
+    }
+    await ctx.reply(msgText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
   }
 
   bot.action('action_team_members', async (ctx) => {
@@ -2541,6 +2683,81 @@ function setupBotHandlers(bot) {
       }
       const refreshedUser = await db.getUser(ctx.from.id);
       await sendTeamMembersMenu(ctx, refreshedUser);
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  bot.action('action_leave_team', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const user = await db.getUser(ctx.from.id);
+      const team = await db.getTeam(user.teamId);
+      if (!team) return;
+
+      const text = `🚪 *Jamoadan chiqish*\n\nHaqiqatan ham *${escapeMarkdown(team.name)}* jamoasidan chiqmoqchimisiz?\n` +
+        `Jamoani tark etganingizdan so'ng, jamoa loyihalariga kirish huquqini va balansini yo'qotasiz!`;
+
+      await ctx.editMessageText(text, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback("✅ Ha, Chiqish", 'leave_team_confirm'),
+            Markup.button.callback("❌ Yo'q, Qolish", 'action_team_members')
+          ]
+        ])
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  bot.action('leave_team_confirm', async (ctx) => {
+    try {
+      const userId = ctx.from.id;
+      const user = await db.getUser(userId);
+      if (!user.teamId) {
+        await ctx.answerCbQuery("Siz jamoa a'zosi emassiz.");
+        return sendStartTeamMenu(ctx);
+      }
+      
+      const teamId = user.teamId;
+      const team = await db.getTeam(teamId);
+      const { newOwnerId } = await db.removeUserFromTeam(teamId, userId);
+      
+      await ctx.answerCbQuery("Siz jamoani tark etdingiz.", { show_alert: true });
+      
+      if (newOwnerId && team) {
+        try {
+          await ctx.telegram.sendMessage(newOwnerId, `👑 Jamoa rahbari jamoadan chiqib ketgani sababli, siz '${team.name}' jamoasining yangi rahbari (owner) etib tayinlandingiz!`);
+        } catch (mErr) {
+          console.error("Failed to notify new owner:", mErr);
+        }
+      }
+
+      await sendStartTeamMenu(ctx, true);
+    } catch (e) {
+      console.error(e);
+    }
+  });
+
+  bot.action('action_transfer_owner', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const user = await db.getUser(ctx.from.id);
+      const team = await db.getTeam(user.teamId);
+      if (!team || team.ownerId !== user.id) {
+        return ctx.reply("Siz jamoa rahbari emassiz!");
+      }
+      
+      await db.updateUser(user.id, { state: 'ENTER_TRANSFER_OWNER_ID' });
+      
+      await ctx.editMessageText("👑 *Jamoa ownerligini topshirish*\n\nJamoa rahbariyatini topshirmoqchi bo'lgan foydalanuvchining Telegram ID raqamini yozib yuboring:\n\n_Eslatma: Agar u foydalanuvchi jamoada bo'lmasa, u avtomatik ravishda jamoaga qo'shiladi va owner qilinadi._", {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback("⬅️ Bekor qilish", 'action_team_members')]
+        ])
+      });
     } catch (e) {
       console.error(e);
     }
@@ -3024,13 +3241,8 @@ function setupBotHandlers(bot) {
         const team = await db.getTeam(code);
         if (team) {
           if (team.status === 'APPROVED') {
-            await db.addUserToTeam(code, userId);
             await db.updateUser(userId, { state: 'IDLE' });
-            const sUser = await db.getUser(userId);
-            const successText = (loc.joined_success || "Siz '{team_name}' jamoasiga ulandingiz!")
-              .replace('{team_name}', team.name);
-            await ctx.reply(successText);
-            await sendTeamMenu(ctx, sUser);
+            await requestToJoinTeam(ctx, code, userId);
           } else if (team.status === 'PENDING') {
             await ctx.reply("Ushbu jamoa tasdiqlanish arafasida. Iltimos keyinroq urinib ko'ring.");
           } else {
@@ -3039,6 +3251,54 @@ function setupBotHandlers(bot) {
         } else {
           await ctx.reply("Kod noto'g'ri yoki jamoa topilmadi. Qaytadan urinib ko'ring:");
         }
+      } else if (user.state === 'ENTER_TRANSFER_OWNER_ID') {
+        const targetId = Number(ctx.message.text.trim());
+        if (isNaN(targetId) || targetId <= 0) {
+          return ctx.reply("ID raqami noto'g'ri. Iltimos, faqat musbat butun son yuboring:");
+        }
+        
+        if (targetId === userId) {
+          return ctx.reply("Siz allaqachon jamoa rahbarisiz. Boshqa foydalanuvchi ID raqamini kiriting:");
+        }
+        
+        const team = await db.getTeam(user.teamId);
+        if (!team) {
+          await db.updateUser(userId, { state: 'IDLE' });
+          return ctx.reply("Sizda faol jamoa mavjud emas.");
+        }
+        
+        if (team.ownerId !== userId) {
+          await db.updateUser(userId, { state: 'IDLE' });
+          return ctx.reply("Siz jamoa rahbari emassiz.");
+        }
+        
+        const targetUser = await db.getUser(targetId);
+        if (targetUser.teamId && targetUser.teamId !== team.id) {
+          return ctx.reply("Bu foydalanuvchi allaqachon boshqa jamoa a'zosi!");
+        }
+        
+        // Add targetUser to team if not already in team
+        if (targetUser.teamId !== team.id) {
+          await db.addUserToTeam(team.id, targetId);
+        }
+        
+        // Set targetUser as new owner
+        team.ownerId = targetId;
+        await db.save();
+        
+        await db.updateUser(userId, { state: 'IDLE' });
+        
+        const newOwnerName = targetUser.username ? `@${targetUser.username}` : `Foydalanuvchi #${targetId}`;
+        
+        await ctx.reply(`👑 Jamoa ownerligi muvaffaqiyatli topshirildi!\n\nYangi owner: *${escapeMarkdown(newOwnerName)}* (ID: \`${targetId}\`)`, { parse_mode: 'Markdown' });
+        
+        try {
+          await ctx.telegram.sendMessage(targetId, `👑 Siz '${team.name}' jamoasining rahbari (owner) etib tayinlandingiz!`);
+        } catch (err) {
+          console.error("Failed to notify new owner of transfer:", err);
+        }
+        
+        await sendTeamMembersMenu(ctx, await db.getUser(userId), false);
       } else if (user.state === 'ENTER_TITLE') {
         if (!user.currentSession) return;
         user.currentSession.projectTitle = ctx.message.text;

@@ -434,15 +434,20 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
   async removeUserFromTeam(id, userId) {
     const team = await this.getTeam(id);
     const numericUserId = Number(userId);
+    let newOwnerId = null;
     if (team) {
       team.members = team.members.filter(m => m !== numericUserId);
       if (team.ownerId === numericUserId) {
         team.ownerId = team.members[0] || null;
+        newOwnerId = team.ownerId;
       }
       await this.updateUser(numericUserId, { teamId: null, state: 'IDLE' });
+      if (team.members.length === 0) {
+        this.data.teams = this.data.teams.filter(t => t.id !== team.id);
+      }
       await this.save();
     }
-    return team;
+    return { team, newOwnerId };
   }
 
   async getPayments() {
