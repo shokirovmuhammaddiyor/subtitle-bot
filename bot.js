@@ -1,5 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import 'dotenv/config';
 
 import os from 'os';
 import crypto from 'crypto';
@@ -3909,6 +3908,14 @@ function downloadMkvWithAria2(pendingItem, downloadDir) {
     logEvent('INFO', `[Aria2c] Starting download for: ${pendingItem.title} to ${downloadDir}`);
     const child = spawn('aria2c', args);
 
+    // Set 5 minutes timeout to prevent hanging forever on peers/metadata resolution
+    const timeout = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch (e) {}
+      reject(new Error('Aria2c download timed out (stuck on peer connection/metadata)'));
+    }, 5 * 60 * 1000);
+
     let lastProgress = 0;
     
     child.stdout.on('data', async (data) => {
@@ -3930,7 +3937,13 @@ function downloadMkvWithAria2(pendingItem, downloadDir) {
       console.error(`[Aria2c Error] ${data.toString()}`);
     });
 
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+
     child.on('close', (code) => {
+      clearTimeout(timeout);
       if (code === 0) {
         logEvent('SUCCESS', `[Aria2c] Download complete for ${pendingItem.title}`);
         resolve();

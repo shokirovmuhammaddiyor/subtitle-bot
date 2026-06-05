@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { MongoClient } from 'mongodb';
 
 export class Database {
