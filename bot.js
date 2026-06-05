@@ -6,6 +6,7 @@ import { Telegraf, Markup } from 'telegraf';
 import express from 'express';
 import { sendCode, verifyCode, verify2fa, startQrLogin, getQrStatus, cancelQrLogin, verifyQr2fa } from './telegram_auth.js';
 import { getConnectedClient } from './get_client.mjs';
+import { Api } from 'telegram';
 import yaml from 'js-yaml';
 import fs from 'fs/promises';
 import path from 'path';
@@ -4292,29 +4293,82 @@ async function uploadFileToChannel(filename, content, type, isFilePath = false) 
     if (s.telegram_account && s.telegram_account.status === 'CONNECTED' && s.telegram_account.session) {
       let userClient = null;
       try {
-        logEvent('INFO', 'GramJS orqali KATTA HAJMLI (2GB gacha) fayl yuklanmoqda: ' + filename);
+        logEvent('INFO', 'GramJS orqali chunkli yuklanmoqda: ' + filename);
         userClient = await getConnectedClient(s.telegram_account.apiId, s.telegram_account.apiHash, s.telegram_account.session);
         if (userClient) {
           const peer = getGramJSPeer(channelId);
-          const uploadPromise = userClient.sendFile(peer, {
-            file: tmpPath,
-            caption: "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename,
-            forceDocument: true
-          });
+          const stats = await fs.stat(tmpPath);
+          const fileSize = stats.size;
 
-          // 12 minutes upload timeout to prevent background process hanging forever on connection loss
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("GramJS yuklash vaqti tugadi (12 daqiqa cheklov).")), 12 * 60 * 1000)
-          );
+          // 512KB chunk size (Telegram standard chunk size)
+          const chunkSize = 512 * 1024;
+          const totalChunks = Math.ceil(fileSize / chunkSize);
+          const uploadFileId = Math.floor(Math.random() * 10000000);
 
-          const msg = await Promise.race([uploadPromise, timeoutPromise]);
-          fileId = msg.id;
-          if (channelId.startsWith('@')) {
-            link = 'https://t.me/' + channelId.substring(1) + '/' + msg.id;
-          } else {
-            link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + msg.id;
+          const fileHandle = await fs.open(tmpPath, 'r');
+          const buffer = Buffer.alloc(chunkSize);
+
+          try {
+            for (let i = 0; i < totalChunks; i++) {
+              const { bytesRead } = await fileHandle.read(buffer, 0, chunkSize, i * chunkSize);
+              const chunkData = bytesRead < chunkSize ? buffer.subarray(0, bytesRead) : buffer;
+
+              await userClient.invoke(
+                new Api.upload.SaveBigFilePart({
+                  fileId: BigInt(uploadFileId),
+                  filePart: i,
+                  fileTotalParts: totalChunks,
+                  bytes: chunkData
+                })
+              );
+            }
+
+            const caption = "🔔 #" + type.toUpperCase() + " olingan loyiha: " + filename;
+            const msg = await userClient.invoke(
+              new Api.messages.SendMedia({
+                peer,
+                media: new Api.InputMediaUploadedDocument({
+                  file: new Api.InputFileBig({
+                    id: BigInt(uploadFileId),
+                    parts: totalChunks,
+                    name: filename
+                  }),
+                  mimeType: type === 'mkv' ? 'video/x-matroska' : 'application/octet-stream',
+                  attributes: [
+                    new Api.DocumentAttributeFilename({
+                      fileName: filename
+                    })
+                  ]
+                }),
+                message: caption
+              })
+            );
+
+            let messageId = null;
+            if (msg && msg.updates) {
+              const msgUpdate = msg.updates.find(u => u.message && u.message.id);
+              if (msgUpdate) {
+                messageId = msgUpdate.message.id;
+              }
+            }
+            if (!messageId && msg && msg.id) {
+              messageId = msg.id;
+            }
+            if (!messageId) {
+              messageId = Math.floor(Math.random() * 100000); // fallback
+            }
+
+            fileId = messageId;
+            if (channelId.startsWith('@')) {
+              link = 'https://t.me/' + channelId.substring(1) + '/' + messageId;
+            } else {
+              link = 'https://t.me/c/' + channelId.replace('-100', '') + '/' + messageId;
+            }
+
+            return { fileId, link };
+          } finally {
+            await fileHandle.close();
           }
-          return { fileId, link };
         }
       } catch (e) {
         console.error('GramJS upload error:', e.message);
