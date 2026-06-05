@@ -11,6 +11,9 @@ import yaml from 'js-yaml';
 import fs from 'fs/promises';
 import path from 'path';
 import { db } from './database.js';
+import { spawn, exec } from 'child_process';
+import { promisify } from 'util';
+const execPromise = promisify(exec);
 import { translateSubtitles, resetAi, setLogger } from './service.js';
 
 let systemLogs = [
@@ -188,19 +191,9 @@ async function runBackupProcedure() {
     const todayStr = new Date().toISOString().slice(0, 10);
     const todayTime = Date.now();
     const filename = `backup_${todayStr}.json`;
-    const tempPath = path.join(os.tmpdir(), filename);
 
-    // Read current db.json content
-    let dbContent;
-    try {
-      dbContent = await fs.readFile('db.json', 'utf-8');
-    } catch (e) {
-      console.warn('[BACKUP] db.json does not exist yet to backup:', e.message);
-      return;
-    }
-
-    // Write temp file
-    await fs.writeFile(tempPath, dbContent, 'utf-8');
+    // Serialize live database state in-memory directly to ensure backup is 100% current
+    const dbContent = JSON.stringify(db.data, null, 2);
 
     // Upload to Telegram channel
     const uploadRes = await uploadFileToChannel(filename, dbContent, 'backup');
@@ -222,16 +215,13 @@ async function runBackupProcedure() {
       createdAt: new Date().toISOString()
     });
     
-    // Prune list older than 7 items
-    if (db.data.backups.length > 7) {
-      db.data.backups = db.data.backups.slice(db.data.backups.length - 7);
+    // Keep last 15 backups (increased for better user safety)
+    if (db.data.backups.length > 15) {
+      db.data.backups = db.data.backups.slice(db.data.backups.length - 15);
     }
     
     await db.save();
     console.log(`[BACKUP] Successfully created cloud backup: ${filename}`);
-
-    // Remove temp file
-    await fs.unlink(tempPath).catch(() => {});
   } catch (err) {
     console.error('[BACKUP ERROR] Failed to run automated backup procedure:', err);
   }
@@ -248,11 +238,8 @@ async function runCloudBackupProcedure() {
     const channelId = s.storage_channel_id;
     if (!channelId || !activeBotInstance) return;
 
-    let dbContent;
-    try {
-      dbContent = await fs.readFile('db.json', 'utf-8');
-    } catch (e) { return; }
-
+    // Serialize live state
+    const dbContent = JSON.stringify(db.data, null, 2);
     const todayStr = new Date().toISOString().slice(0, 10);
     const backupName = `SubTrans_DB_Backup_${todayStr}.json`;
 
@@ -440,6 +427,27 @@ app.get('/api/stats', async (req, res) => {
     .sort((a, b) => b.projectsCount - a.projectsCount || b.tokens - a.tokens)
     .slice(0, 10);
 
+  // Calculate system CPU and RAM load
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const memoryUsagePercent = Math.round((usedMem / totalMem) * 100);
+
+  const loadAvg = os.loadavg();
+  const cpuCount = os.cpus().length;
+  const cpuUsagePercent = Math.min(Math.round((loadAvg[0] / cpuCount) * 100), 100);
+
+  const processMemory = process.memoryUsage();
+
+  const systemLoad = {
+    cpuUsagePercent,
+    memoryUsagePercent,
+    memoryUsageStr: `${(usedMem / (1024 * 1024 * 1024)).toFixed(2)} GB / ${(totalMem / (1024 * 1024 * 1024)).toFixed(2)} GB`,
+    processMemoryRss: `${(processMemory.rss / (1024 * 1024)).toFixed(1)} MB`,
+    cpuCount,
+    pid: process.pid
+  };
+
   res.json({
     usersCount: db.data.users.length,
     projectsCount: db.data.projects.length,
@@ -456,7 +464,8 @@ app.get('/api/stats', async (req, res) => {
       totalCount: ratings.length
     },
     translationSpeed: "24.8 lines/sec",
-    activeTeams
+    activeTeams,
+    systemLoad
   });
 });
 
@@ -794,11 +803,12 @@ app.post('/api/admin/backups/restore', async (req, res) => {
       return res.status(404).json({ error: 'Zaxira topilmadi' });
     }
 
-    // Emergency local backup of current state
+    // Emergency cloud backup of current state
     try {
-      const current_db = await fs.readFile('db.json', 'utf-8');
-      await fs.writeFile('backups/pre_restore_backup.json', current_db, 'utf-8');
-    } catch (e) {}
+      await runBackupProcedure();
+    } catch (e) {
+      console.error('[BACKUP] Emergency cloud backup failed before restore, continuing...', e);
+    }
 
     // Download content from Telegram
     const buffer = await downloadFileFromChannel(backup.fileId, backup.filename);
@@ -807,15 +817,31 @@ app.post('/api/admin/backups/restore', async (req, res) => {
     }
 
     const content = buffer.toString('utf-8');
-    await fs.writeFile('db.json', content, 'utf-8');
-    await db.init();
+    const parsed = JSON.parse(content);
+
+    // Schema normalization
+    parsed.users = parsed.users || [];
+    parsed.projects = parsed.projects || [];
+    parsed.episodes = parsed.episodes || [];
+    parsed.teams = parsed.teams || [];
+    parsed.payments = parsed.payments || [];
+    parsed.ratings = parsed.ratings || [];
+    parsed.automatedAnimes = parsed.automatedAnimes || [];
+    parsed.promocodes = parsed.promocodes || [];
+    parsed.translationCache = parsed.translationCache || [];
+    parsed.settings = parsed.settings || db.data.settings || {};
+
+    // Keep current backups list intact
+    parsed.backups = db.data.backups || [];
+
+    await db.restoreData(parsed);
     resetAi();
 
     const s = await db.getSettings();
     if (s && s.botToken) {
       process.env.BOT_TOKEN = s.botToken;
       try {
-        const envContent = `BOT_TOKEN=${s.botToken}\nGEMINI_API_KEY=${s.geminiApiKey || ''}\nDEFAULT_BATCH_SIZE=${s.defaultBatchSize || 45}\nPORT=3000\nTELEGRAM_API_ID=${s.telegram_account?.apiId || ''}\nTELEGRAM_API_HASH=${s.telegram_account?.apiHash || ''}\n`;
+        const envContent = `BOT_TOKEN=${s.botToken}\nGEMINI_API_KEY=${s.geminiApiKey || ''}\nDEFAULT_BATCH_SIZE=${s.defaultBatchSize || 45}\nTELEGRAM_API_ID=${s.telegram_account?.apiId || ''}\nTELEGRAM_API_HASH=${s.telegram_account?.apiHash || ''}\n`;
         await fs.writeFile('.env', envContent, 'utf-8');
       } catch (e) {}
       await restartBot(s.botToken);
@@ -834,22 +860,38 @@ app.post('/api/admin/backups/upload', async (req, res) => {
     if (!dbContent) {
       return res.status(400).json({ error: 'DB content is required' });
     }
-    JSON.parse(dbContent); // Data schema validation
+    const parsed = JSON.parse(dbContent); // Data schema validation
 
+    // Emergency cloud backup of current state
     try {
-      const current_db = await fs.readFile('db.json', 'utf-8');
-      await fs.writeFile('backups/pre_upload_backup.json', current_db, 'utf-8');
-    } catch (e) { }
+      await runBackupProcedure();
+    } catch (e) {
+      console.error('[BACKUP] Emergency cloud backup failed before upload, continuing...', e);
+    }
 
-    await fs.writeFile('db.json', dbContent, 'utf-8');
-    await db.init();
+    // Schema normalization
+    parsed.users = parsed.users || [];
+    parsed.projects = parsed.projects || [];
+    parsed.episodes = parsed.episodes || [];
+    parsed.teams = parsed.teams || [];
+    parsed.payments = parsed.payments || [];
+    parsed.ratings = parsed.ratings || [];
+    parsed.automatedAnimes = parsed.automatedAnimes || [];
+    parsed.promocodes = parsed.promocodes || [];
+    parsed.translationCache = parsed.translationCache || [];
+    parsed.settings = parsed.settings || db.data.settings || {};
+
+    // Keep current backups list intact
+    parsed.backups = db.data.backups || [];
+
+    await db.restoreData(parsed);
     resetAi();
 
     const s = await db.getSettings();
     if (s && s.botToken) {
       process.env.BOT_TOKEN = s.botToken;
       try {
-        const envContent = `BOT_TOKEN=${s.botToken}\nGEMINI_API_KEY=${s.geminiApiKey || ''}\nDEFAULT_BATCH_SIZE=${s.defaultBatchSize || 45}\nPORT=3000\nTELEGRAM_API_ID=${s.telegram_account?.apiId || ''}\nTELEGRAM_API_HASH=${s.telegram_account?.apiHash || ''}\n`;
+        const envContent = `BOT_TOKEN=${s.botToken}\nGEMINI_API_KEY=${s.geminiApiKey || ''}\nDEFAULT_BATCH_SIZE=${s.defaultBatchSize || 45}\nTELEGRAM_API_ID=${s.telegram_account?.apiId || ''}\nTELEGRAM_API_HASH=${s.telegram_account?.apiHash || ''}\n`;
         await fs.writeFile('.env', envContent, 'utf-8');
       } catch (e) {}
       await restartBot(s.botToken);
@@ -1427,25 +1469,26 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-app.listen(3000, '0.0.0.0', () => {
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n  🚀 SubTrans Server successfully started!`);
   console.log(`  -----------------------------------------`);
-  console.log(`  Local:            http://localhost:3000`);
+  console.log(`  Local:            http://localhost:${PORT}`);
 
   const interfaces = os.networkInterfaces();
   let ipFound = false;
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
       if (iface.family === 'IPv4' && !iface.internal) {
-        console.log(`  Network (IP):    http://${iface.address}:3000`);
+        console.log(`  Network (IP):    http://${iface.address}:${PORT}`);
         ipFound = true;
       }
     }
   }
   if (!ipFound) {
-    console.log(`  Network (IP):    http://127.0.0.1:3000`);
+    console.log(`  Network (IP):    http://127.0.0.1:${PORT}`);
   }
-  console.log(`  Default Port:     3452 (Optimized to listen on 3000 for sandboxed Cloud Environment routing)`);
+  console.log(`  Default Port:     3452 (Optimized to listen on ${PORT} for sandboxed Cloud Environment routing)`);
   console.log(`  -----------------------------------------\n`);
 });
 
@@ -3117,12 +3160,16 @@ async function runTranslation(ctx, user) {
   // Multi-processing team slots bottleneck queue system
   let hasShownQueueAlert = false;
   while (true) {
+    // Prune stale active jobs (no progress updates for more than 3 minutes)
+    const now = Date.now();
+    activeJobs = activeJobs.filter(j => !j.lastUpdated || (now - j.lastUpdated) < 3 * 60 * 1000);
+
     const currentTeamJobs = activeJobs.filter(j => {
       const u = db.data.users.find(usr => usr.id.toString() === j.userId);
       return u && u.teamId === team.id && j.userId !== userId.toString();
     });
 
-    if (currentTeamJobs.length < team.maxConcurrentJobs) {
+    if (currentTeamJobs.length < (team.maxConcurrentJobs || 5)) {
       break;
     }
 
@@ -3212,7 +3259,8 @@ async function runTranslation(ctx, user) {
           progress: progressPercent,
           eta,
           batch: `${translated}/${total}`,
-          userId: userId.toString()
+          userId: userId.toString(),
+          lastUpdated: Date.now()
         };
         if (existingIndex !== -1) {
           activeJobs[existingIndex] = jobInfo;
@@ -3378,6 +3426,140 @@ async function runTranslation(ctx, user) {
 // SECTION: AUTOMATED SUBSPLEASE TRACKERS, WORKERS AND FILE UPLOADERS
 // ------------------------------------------------------------------------
 
+async function parseRssFeed() {
+  try {
+    const response = await fetch('https://subsplease.org/rss/?r=1080', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36',
+        'Referer': 'https://subsplease.org/',
+      }
+    });
+    if (!response.ok) {
+      logEvent('ERROR', `[RSS Worker] Failed to fetch RSS feed: ${response.statusText}`);
+      return [];
+    }
+    const text = await response.text();
+    const items = [];
+    const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+    let match;
+    while ((match = itemRegex.exec(text)) !== null) {
+      const itemStr = match[1];
+      const titleMatch = itemStr.match(/<title>([\s\S]*?)<\/title>/);
+      const linkMatch = itemStr.match(/<link>([\s\S]*?)<\/link>/);
+      if (titleMatch && linkMatch) {
+        const rawTitle = titleMatch[1].trim();
+        const magnet = linkMatch[1].trim().replace(/&amp;/g, '&');
+        
+        const titleRegex = /^\[SubsPlease\] (.*?) - (\d+(?:\.\d+)?) \((1080p|720p|480p)\)(?: \[[A-F0-9]+\])?\.mkv$/i;
+        const parsedTitle = rawTitle.match(titleRegex);
+        let animeTitle = '';
+        let episode = '01';
+        let resolution = '1080p';
+        if (parsedTitle) {
+          animeTitle = parsedTitle[1].trim();
+          episode = parsedTitle[2].trim();
+          resolution = parsedTitle[3].trim();
+        } else {
+          const cleanTitle = rawTitle.replace('[SubsPlease] ', '');
+          const parts = cleanTitle.split(' - ');
+          if (parts.length >= 2) {
+            animeTitle = parts[0].trim();
+            const epPart = parts[1].split(' ')[0] || '01';
+            episode = epPart.replace(/[^0-9.]/g, '');
+          }
+        }
+
+        if (animeTitle) {
+          items.push({
+            rawTitle,
+            animeTitle,
+            episode,
+            resolution,
+            magnet
+          });
+        }
+      }
+    }
+    return items;
+  } catch (err) {
+    logEvent('ERROR', `[RSS Parser Error] ${err.message}`);
+    return [];
+  }
+}
+
+function findRssItemForSchedule(item, rssItems) {
+  const clean = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const schedTitleClean = clean(item.title);
+  
+  return rssItems.find(rss => {
+    const rssTitleClean = clean(rss.animeTitle);
+    return rssTitleClean === schedTitleClean || rssTitleClean.includes(schedTitleClean) || schedTitleClean.includes(rssTitleClean);
+  });
+}
+
+function downloadMkvWithAria2(pendingItem, downloadDir) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '--dir=' + downloadDir,
+      '--seed-time=0',
+      '--follow-torrent=mem',
+      '--bt-stop-timeout=180',
+      '--summary-interval=1',
+      pendingItem.magnet
+    ];
+
+    logEvent('INFO', `[Aria2c] Starting download for: ${pendingItem.title} to ${downloadDir}`);
+    const child = spawn('aria2c', args);
+
+    let lastProgress = 0;
+    
+    child.stdout.on('data', async (data) => {
+      const output = data.toString();
+      const match = output.match(/\((\d+)%\).*?ETA:([^\s\]]+)/);
+      if (match) {
+        const progress = parseInt(match[1]);
+        const eta = match[2];
+        if (progress !== lastProgress) {
+          lastProgress = progress;
+          pendingItem.progress = progress;
+          pendingItem.eta = `Yuklanmoqda: ${progress}% (ETA: ${eta})`;
+          await db.save();
+        }
+      }
+    });
+
+    child.stderr.on('data', (data) => {
+      console.error(`[Aria2c Error] ${data.toString()}`);
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        logEvent('SUCCESS', `[Aria2c] Download complete for ${pendingItem.title}`);
+        resolve();
+      } else {
+        logEvent('ERROR', `[Aria2c] Failed with exit code ${code}`);
+        reject(new Error(`Aria2c exited with code ${code}`));
+      }
+    });
+  });
+}
+
+async function extractSubtitle(mkvPath, subPath) {
+  logEvent('INFO', `[FFmpeg] Extracting subtitle from ${mkvPath} to ${subPath}`);
+  try {
+    await execPromise(`ffmpeg -y -i "${mkvPath}" -map 0:s:0 "${subPath}"`);
+    logEvent('SUCCESS', `[FFmpeg] Extracted subtitle successfully`);
+  } catch (err) {
+    logEvent('WARNING', `[FFmpeg] Failed to extract subtitle from 0:s:0, attempting general search...`);
+    try {
+      await execPromise(`ffmpeg -y -i "${mkvPath}" "${subPath}"`);
+      logEvent('SUCCESS', `[FFmpeg] Extracted subtitle using fallback method`);
+    } catch (err2) {
+      throw new Error(`FFmpeg extraction failed: ${err2.message}`);
+    }
+  }
+}
+
 let isWorkerRunning = false;
 async function runAutomatedAnimeWorker() {
   if (isWorkerRunning) return;
@@ -3394,48 +3576,54 @@ async function runAutomatedAnimeWorker() {
           const schedule = resJson.schedule || [];
           const botUsername = activeBotInstance ? activeBotInstance.botInfo?.username : 'sub_trans_bot';
 
+          const rssItems = await parseRssFeed();
+
           for (const item of schedule) {
             if (item.aired) {
-              const animeTitle = item.title;
-              const episodeNum = item.time.split(':')[0] || '01';
+              const rssMatch = findRssItemForSchedule(item, rssItems);
+              if (rssMatch) {
+                const animeTitle = rssMatch.animeTitle;
+                const episodeNum = rssMatch.episode;
 
-              const exists = db.data.automatedAnimes.some(a => a.title === animeTitle && a.episode === episodeNum);
-              if (!exists) {
-                const formatFileName = (prefix, name, ep) => {
-                  const botPrefix = `@${prefix || 'bot'}`;
-                  const epSuffix = ` Ep ${ep}`;
-                  const reserved = botPrefix.length + 1 + epSuffix.length;
-                  let maxLen = 25 - reserved;
-                  if (maxLen < 3) maxLen = 3;
-                  const truncatedTitle = name.length > maxLen ? name.substring(0, maxLen - 2) + '..' : name;
-                  return `${botPrefix} ${truncatedTitle}${epSuffix}`;
-                };
+                const exists = db.data.automatedAnimes.some(a => a.title === animeTitle && a.episode === episodeNum);
+                if (!exists) {
+                  const formatFileName = (prefix, name, ep) => {
+                    const botPrefix = `@${prefix || 'bot'}`;
+                    const epSuffix = ` Ep ${ep}`;
+                    const reserved = botPrefix.length + 1 + epSuffix.length;
+                    let maxLen = 25 - reserved;
+                    if (maxLen < 3) maxLen = 3;
+                    const truncatedTitle = name.length > maxLen ? name.substring(0, maxLen - 2) + '..' : name;
+                    return `${botPrefix} ${truncatedTitle}${epSuffix}`;
+                  };
 
-                const baseName = formatFileName(botUsername, animeTitle, episodeNum);
-                const mkvName = `${baseName}.mkv`;
-                const subName = `${baseName}.ass`;
+                  const baseName = formatFileName(botUsername, animeTitle, episodeNum);
+                  const mkvName = `${baseName}.mkv`;
+                  const subName = `${baseName}.ass`;
 
-                const newEntry = {
-                  id: "auto_" + Date.now().toString(36) + "_" + Math.random().toString(36).substring(3, 8),
-                  title: animeTitle,
-                  episode: episodeNum,
-                  page: item.page,
-                  mkvName,
-                  subName,
-                  mkvFileId: null,
-                  mkvLink: null,
-                  subFileId: null,
-                  subLink: null,
-                  status: "PENDING",
-                  progress: 0,
-                  eta: "Navbatda turibdi...",
-                  createdAt: new Date().toISOString(),
-                  tracks: ["English (ASS)", "Japanese (ASS)"],
-                  visible: true
-                };
+                  const newEntry = {
+                    id: "auto_" + Date.now().toString(36) + "_" + Math.random().toString(36).substring(3, 8),
+                    title: animeTitle,
+                    episode: episodeNum,
+                    page: item.page,
+                    mkvName,
+                    subName,
+                    mkvFileId: null,
+                    mkvLink: null,
+                    subFileId: null,
+                    subLink: null,
+                    status: "PENDING",
+                    progress: 0,
+                    eta: "Navbatda turibdi...",
+                    createdAt: new Date().toISOString(),
+                    tracks: ["English (ASS)", "Japanese (ASS)"],
+                    visible: true,
+                    magnet: rssMatch.magnet
+                  };
 
-                db.data.automatedAnimes.unshift(newEntry);
-                logEvent('INFO', `[Anime] New airing anime detected: ${animeTitle} - Ep ${episodeNum}`);
+                  db.data.automatedAnimes.unshift(newEntry);
+                  logEvent('INFO', `[Anime] New airing anime detected & matched: ${animeTitle} - Ep ${episodeNum}`);
+                }
               }
             }
           }
@@ -3455,60 +3643,106 @@ async function runAutomatedAnimeWorker() {
     if (pendingItem) {
       logEvent('INFO', `[Queue Worker] Commenced automated pipeline for: ${pendingItem.title} - ${pendingItem.episode}`);
 
-      pendingItem.status = 'DOWNLOADING';
-      for (let p = 0; p <= 100; p += 25) {
-        pendingItem.progress = p;
-        pendingItem.eta = `${Math.ceil((100 - p) * 0.4)} soniya qoldi`;
+      const downloadDir = path.join(process.cwd(), 'scratch', 'downloads', pendingItem.id);
+      await fs.mkdir(downloadDir, { recursive: true });
+
+      try {
+        pendingItem.status = 'DOWNLOADING';
+        pendingItem.progress = 0;
+        pendingItem.eta = 'Kutilmoqda...';
         await db.save();
-        await new Promise(r => setTimeout(r, 1500));
-      }
 
-      pendingItem.status = 'EXTRACTING';
-      pendingItem.progress = 100;
-      pendingItem.eta = "Subtitrlar chiqarib olinmoqda...";
-      await db.save();
-      await new Promise(r => setTimeout(r, 1500));
+        if (!pendingItem.magnet) {
+          throw new Error('Magnet link is missing in the database entry.');
+        }
 
-      pendingItem.status = 'TRANSLATING';
-      pendingItem.progress = 0;
-      pendingItem.eta = "Gemini tarjima boshlandi...";
-      await db.save();
+        await downloadMkvWithAria2(pendingItem, downloadDir);
 
-      const totalParts = 125;
-      for (let l = 10; l <= totalParts; l += 30) {
-        pendingItem.progress = Math.min(Math.round((l / totalParts) * 100), 100);
-        pendingItem.eta = `${Math.ceil((totalParts - l) / 8)} soniya qoldi`;
+        const files = await fs.readdir(downloadDir);
+        const mkvFile = files.find(f => f.endsWith('.mkv'));
+        if (!mkvFile) {
+          throw new Error('MKV file not found in download directory');
+        }
+        const mkvPath = path.join(downloadDir, mkvFile);
+
+        pendingItem.status = 'EXTRACTING';
+        pendingItem.progress = 50;
+        pendingItem.eta = 'Subtitrlar chiqarib olinmoqda...';
         await db.save();
-        await new Promise(r => setTimeout(r, 1500));
+
+        const extractedSubPath = path.join(downloadDir, 'extracted.ass');
+        await extractSubtitle(mkvPath, extractedSubPath);
+
+        const subExists = await fs.stat(extractedSubPath).then(s => s.isFile() && s.size > 0).catch(() => false);
+        if (!subExists) {
+          throw new Error('Subtitle extraction succeeded but file is empty or missing');
+        }
+
+        pendingItem.status = 'TRANSLATING';
+        pendingItem.progress = 0;
+        pendingItem.eta = 'Gemini tarjima boshlandi...';
+        await db.save();
+
+        const subContent = await fs.readFile(extractedSubPath, 'utf8');
+        const translatedSubContent = await translateSubtitles({
+          content: subContent,
+          ext: 'ass',
+          targetLanguage: "O'zbekcha",
+          qualityPrompt: "Tarjimani aniq va mukammal qilgin, anime uslubiga moslashtirib.",
+          systemPrompt: settings.systemPrompt,
+          batchSize: settings.defaultBatchSize || 45,
+          projectTitle: pendingItem.title,
+          episodeNumber: pendingItem.episode,
+          onProgress: async ({ total, translated, eta, progressBar }) => {
+            pendingItem.progress = Math.min(Math.round((translated / total) * 100), 100);
+            pendingItem.eta = `Tarjima: ${translated}/${total} (${eta} qoldi)`;
+            await db.save();
+          }
+        });
+
+        const translatedSubPath = path.join(downloadDir, pendingItem.subName);
+        await fs.writeFile(translatedSubPath, translatedSubContent);
+
+        pendingItem.status = 'UPLOADING';
+        pendingItem.progress = 80;
+        pendingItem.eta = 'Telegramga yuklanmoqda...';
+        await db.save();
+
+        logEvent('INFO', `[Upload] Uploading subtitle: ${pendingItem.subName}`);
+        const uploadSubRes = await uploadFileToChannel(pendingItem.subName, translatedSubPath, 'subtitle', true);
+        if (uploadSubRes.fileId) {
+          pendingItem.subFileId = uploadSubRes.fileId;
+          pendingItem.subLink = uploadSubRes.link;
+        } else {
+          throw new Error('Failed to upload subtitle file to Telegram storage channel');
+        }
+
+        logEvent('INFO', `[Upload] Uploading MKV file: ${mkvFile}`);
+        const uploadMkvRes = await uploadFileToChannel(pendingItem.mkvName, mkvPath, 'mkv', true);
+        if (uploadMkvRes.fileId) {
+          pendingItem.mkvFileId = uploadMkvRes.fileId;
+          pendingItem.mkvLink = uploadMkvRes.link;
+        } else {
+          throw new Error('Failed to upload MKV file to Telegram storage channel');
+        }
+
+        pendingItem.status = 'COMPLETED';
+        pendingItem.progress = 100;
+        pendingItem.eta = 'Bajarildi';
+        await db.save();
+        logEvent('SUCCESS', `[Queue Worker] Finished automated pipeline for: ${pendingItem.title} - ${pendingItem.episode}`);
+
+      } catch (err) {
+        pendingItem.status = 'FAILED';
+        pendingItem.progress = 0;
+        pendingItem.eta = `Xatolik: ${err.message}`;
+        await db.save();
+        logEvent('ERROR', `[Queue Worker] Pipeline failed for ${pendingItem.title} - ${pendingItem.episode}: ${err.message}`);
+      } finally {
+        await fs.rm(downloadDir, { recursive: true, force: true }).catch(err => {
+          console.error('Failed to clean up download directory:', err);
+        });
       }
-
-      pendingItem.status = 'COMPLETED';
-      pendingItem.progress = 100;
-      pendingItem.eta = 'Bajarildi';
-
-      const mockAssContent = `[Script Info]\nTitle: Translated Subtitle\n\n[Events]\nDialogue: 0,0:00:01.00,0:00:04.00,Default,,0,0,0,,Assalomu alaykum, bugun yangi qism chiqdi!\nDialogue: 0,0:00:05.10,0:00:10.00,Default,,0,0,0,,Umid qilamanki, sizlarga tarjimamiz yoqadi.`;
-
-      const uploadRes = await uploadFileToChannel(pendingItem.subName, mockAssContent, 'subtitle');
-      if (uploadRes.fileId) {
-        pendingItem.subFileId = uploadRes.fileId;
-        pendingItem.subLink = uploadRes.link;
-      } else {
-        pendingItem.subFileId = "simulated_sub_file_id";
-        pendingItem.subLink = "https://t.me/c/1234567890/55";
-      }
-
-      const mockMkvContent = "[MKV Video Container File Stream Placeholder]";
-      const uploadMkvRes = await uploadFileToChannel(pendingItem.mkvName, mockMkvContent, 'mkv');
-      if (uploadMkvRes.fileId) {
-        pendingItem.mkvFileId = uploadMkvRes.fileId;
-        pendingItem.mkvLink = uploadMkvRes.link;
-      } else {
-        pendingItem.mkvFileId = "simulated_mkv_file_id";
-        pendingItem.mkvLink = "https://t.me/c/1234567890/56";
-      }
-
-      await db.save();
-      logEvent('SUCCESS', `[Queue Worker] Finished automated pipeline for: ${pendingItem.title} - ${pendingItem.episode}`);
     }
   } catch (err) {
     console.error("Worker process error:", err);
@@ -3517,9 +3751,17 @@ async function runAutomatedAnimeWorker() {
   }
 }
 
-async function uploadFileToChannel(filename, content, type) {
-  const tmpPath = path.join(os.tmpdir(), filename);
-  await fs.writeFile(tmpPath, content);
+async function uploadFileToChannel(filename, content, type, isFilePath = false) {
+  let tmpPath;
+  let shouldDelete = true;
+
+  if (isFilePath) {
+    tmpPath = content;
+    shouldDelete = false;
+  } else {
+    tmpPath = path.join(os.tmpdir(), filename);
+    await fs.writeFile(tmpPath, content);
+  }
 
   let fileId = null;
   let link = null;
@@ -3573,7 +3815,9 @@ async function uploadFileToChannel(filename, content, type) {
       }
     }
   } finally {
-    await fs.unlink(tmpPath).catch(() => {});
+    if (shouldDelete) {
+      await fs.unlink(tmpPath).catch(() => {});
+    }
   }
 
   return { fileId, link };

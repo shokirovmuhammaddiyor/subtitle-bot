@@ -3118,6 +3118,99 @@ export default function App() {
                       </div>
                     </div>
 
+                    {/* System Load & Server Metrics section */}
+                    {stats.systemLoad && (
+                      <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-3">
+                        <h3 className="text-xs font-bold uppercase text-slate-200 border-b border-slate-800 pb-2 flex justify-between items-center">
+                          <span>Server Yuklamasi va Holati</span>
+                          <span className="text-[9px] text-slate-500 capitalize font-normal">CPU & Memory Realtime Meters</span>
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 font-mono text-xs">
+                          {/* CPU card */}
+                          <div className="bg-slate-950 p-3 border border-slate-850 rounded-lg space-y-2">
+                            <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                              <span>CPU YUKLAMASI</span>
+                              <span className="text-white">{stats.systemLoad.cpuUsagePercent}%</span>
+                            </div>
+                            <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  stats.systemLoad.cpuUsagePercent > 80 ? 'bg-rose-500' :
+                                  stats.systemLoad.cpuUsagePercent > 50 ? 'bg-yellow-500' : 'bg-sky-500'
+                                }`}
+                                style={{ width: `${stats.systemLoad.cpuUsagePercent}%` }}
+                              />
+                            </div>
+                            <div className="text-[9px] text-slate-500 font-sans">Cores: {stats.systemLoad.cpuCount} ta yadro</div>
+                          </div>
+
+                          {/* RAM card */}
+                          <div className="bg-slate-950 p-3 border border-slate-850 rounded-lg space-y-2">
+                            <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                              <span>RAM ISHLATILISHI</span>
+                              <span className="text-white">{stats.systemLoad.memoryUsagePercent}%</span>
+                            </div>
+                            <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  stats.systemLoad.memoryUsagePercent > 80 ? 'bg-rose-500' :
+                                  stats.systemLoad.memoryUsagePercent > 50 ? 'bg-yellow-500' : 'bg-emerald-500'
+                                }`}
+                                style={{ width: `${stats.systemLoad.memoryUsagePercent}%` }}
+                              />
+                            </div>
+                            <div className="text-[9px] text-slate-500 font-sans">Hajm: {stats.systemLoad.memoryUsageStr}</div>
+                          </div>
+
+                          {/* Node Process memory card */}
+                          <div className="bg-slate-950 p-3 border border-slate-850 rounded-lg space-y-2">
+                            <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                              <span>NODE.JS METRIKALARI</span>
+                              <span className="text-white">Faol</span>
+                            </div>
+                            <div className="text-white text-[11px] font-bold mt-1">
+                              RSS Memory: <span className="text-violet-400">{stats.systemLoad.processMemoryRss}</span>
+                            </div>
+                            <div className="text-[9px] text-slate-500 font-sans">Process ID: #{stats.systemLoad.pid || 'N/A'}</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Active Jobs Monitor */}
+                    <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-3">
+                      <h3 className="text-xs font-bold uppercase text-slate-200 border-b border-slate-800 pb-2 flex justify-between items-center">
+                        <span>Faol Tarjima Jarayonlari Monitori (Active Jobs)</span>
+                        <span className="text-[9px] text-slate-500 capitalize font-normal">Active concurrent translation progress</span>
+                      </h3>
+                      {stats.activeJobs && stats.activeJobs.length > 0 ? (
+                        <div className="space-y-2">
+                          {stats.activeJobs.map((job: any) => (
+                            <div key={job.id} className="bg-slate-950 p-2.5 rounded border border-slate-850 space-y-1.5 text-xs font-mono">
+                              <div className="flex justify-between items-center text-slate-300">
+                                <span className="font-bold text-white max-w-[200px] truncate">{job.title}</span>
+                                <span className="text-sky-400 font-bold">{job.progress}%</span>
+                              </div>
+                              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                <div 
+                                  className="h-full bg-sky-500 rounded-full transition-all duration-300"
+                                  style={{ width: `${job.progress}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-[9px] text-slate-500">
+                                <span>Turi: {job.type} • Paket: {job.batch}</span>
+                                <span>ETA: {job.eta}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center text-slate-600 font-mono py-6 text-xs font-sans">
+                          Hozirda hech qanday faol tarjima jarayoni yo'q.
+                        </div>
+                      )}
+                    </div>
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* Ratings Distribution progress */}
                       <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-3 flex flex-col justify-between">
