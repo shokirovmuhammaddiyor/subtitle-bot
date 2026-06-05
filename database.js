@@ -288,6 +288,72 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
     return s;
   }
 
+  async insertTranslationCacheEntries(entries) {
+    if (!this.db || !Array.isArray(entries) || entries.length === 0) return;
+    try {
+      const collection = this.db.collection('translationCache');
+      
+      // Ensure all entries have correct ID
+      for (const entry of entries) {
+        if (!entry.id) {
+          entry.id = `${entry.fileHash}_${entry.lineIndex}`;
+        }
+        entry._id = entry.id;
+      }
+      
+      // Update in-memory
+      this.data.translationCache = this.data.translationCache || [];
+      this.data.translationCache.push(...entries);
+      
+      // In-memory unique filter (no duplicates)
+      const seen = new Set();
+      this.data.translationCache = this.data.translationCache.filter(item => {
+        const key = item.id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      // Keep only last 20 hashes in in-memory cache to save memory
+      const hashes = [];
+      for (const entry of this.data.translationCache) {
+        if (!hashes.includes(entry.fileHash)) {
+          hashes.push(entry.fileHash);
+        }
+      }
+      let hashesToRemove = [];
+      if (hashes.length > 20) {
+        hashesToRemove = hashes.slice(0, hashes.length - 20);
+        this.data.translationCache = this.data.translationCache.filter(
+          entry => !hashesToRemove.includes(entry.fileHash)
+        );
+      }
+
+      // Write direct bulk operations (upsert items)
+      const bulkOps = entries.map(entry => {
+        const doc = JSON.parse(JSON.stringify(entry));
+        return {
+          replaceOne: {
+            filter: { _id: doc.id },
+            replacement: doc,
+            upsert: true
+          }
+        };
+      });
+
+      if (bulkOps.length > 0) {
+        await collection.bulkWrite(bulkOps);
+      }
+
+      // Sync the cleanup to MongoDB as well
+      if (hashesToRemove.length > 0) {
+        await collection.deleteMany({ fileHash: { $in: hashesToRemove } });
+      }
+    } catch (err) {
+      console.error('[DB WRITE ERROR] Failed to insert translation cache entries:', err);
+    }
+  }
+
   async getUser(id) {
     const numericId = Number(id);
     let user = this.data.users.find(u => Number(u.id) === numericId);

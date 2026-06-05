@@ -16,6 +16,19 @@ import { promisify } from 'util';
 const execPromise = promisify(exec);
 import { translateSubtitles, resetAi, setLogger } from './service.js';
 
+// Programmatically kill duplicate bot processes to avoid 409 conflicts and double handler execution
+exec(`pgrep -f "bot.js"`, (err, stdout) => {
+  if (stdout) {
+    const pids = stdout.split('\n').map(p => parseInt(p.trim())).filter(p => !isNaN(p) && p !== process.pid);
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+        console.log(`[INIT] Terminated duplicate background bot process (PID: ${pid})`);
+      } catch (e) {}
+    }
+  }
+});
+
 function getCleanChannelId(channelId) {
   if (!channelId) return null;
   let cid = String(channelId).trim();

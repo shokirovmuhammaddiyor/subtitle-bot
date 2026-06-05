@@ -300,12 +300,20 @@ export async function translateSubtitles({
   // We initialize translatedCount to include the already cached lines!
   let translatedCount = total - untranslatedDialogues.length;
 
-  for (let c = 0; c < chunks.length; c++) {
-    const chunk = chunks[c];
-    const payload = chunk.map(item => ({ id: item.d.id, text: item.d.cleanText }));
-    
-    // Part 1: Customizable Translation Tone & Persona Instructions (editable from panel/settings)
-    let interpolatedPrompt = systemPrompt || `Sen professional subtitr tarjimoni va o'zbek tiliga mahalliylashtirish mutaxassisisan. Vazifang berilgan matnlarni yuqori sifatli, tabiiy va dublyajbop o'zbek tiliga to'liq tarjima qilish.
+  const maxConcurrency = Math.min(keys.length, 4) || 1;
+  const chunkQueue = chunks.map((chunk, index) => ({ chunk, index }));
+  let nextQueueIndex = 0;
+
+  async function translationWorker() {
+    while (nextQueueIndex < chunkQueue.length) {
+      const { chunk, index: c } = chunkQueue[nextQueueIndex++];
+      const payload = chunk.map(item => ({ id: item.d.id, text: item.d.cleanText }));
+      
+      // Part 1: Customizable Translation Tone & Persona Instructions (editable from panel/settings)
+      let interpolatedPrompt = systemPrompt || `Sen professional subtitr tarjimoni va o'zbek tiliga mahalliylashtirish mutaxassisisan. Vazifang berilgan matnlarni yuqori sifatli, tabiiy va dublyajbop o'zbek tiliga to'liq tarjima qilish.
+
+Hozirgi loyiha nomi: {movie_name}
+Qism raqami: {episode_number}-qism
 
 Quyidagi qoidalarga qat'iy va to'liq amal qil:
 1. To'liqlik (Chala qolmasligi shart):
@@ -320,28 +328,28 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
 
 4. His-tuyg'ular va Jargonlar:
 - Sahnadagi hissiyotlarni (kesatiq, hazil, hayajon, g'azab) mos o'zbekcha iboralar, maqollar va jargonlar yordamida sifatli va aniq yetkazib ber.`;
-    const movieVal = projectTitle || "Noma'lum kino/serial";
-    const episodeVal = episodeNumber || "1";
+      const movieVal = projectTitle || "Noma'lum kino/serial";
+      const episodeVal = episodeNumber || "1";
 
-    interpolatedPrompt = interpolatedPrompt
-      .replace(/{movie_name}/gi, movieVal)
-      .replace(/{project_title}/gi, movieVal)
-      .replace(/{kino_nomi}/gi, movieVal)
-      .replace(/{title}/gi, movieVal)
-      .replace(/{episode_number}/gi, episodeVal)
-      .replace(/{qism_raqami}/gi, episodeVal)
-      .replace(/{episode}/gi, episodeVal);
+      interpolatedPrompt = interpolatedPrompt
+        .replace(/{movie_name}/gi, movieVal)
+        .replace(/{project_title}/gi, movieVal)
+        .replace(/{kino_nomi}/gi, movieVal)
+        .replace(/{title}/gi, movieVal)
+        .replace(/{episode_number}/gi, episodeVal)
+        .replace(/{qism_raqami}/gi, episodeVal)
+        .replace(/{episode}/gi, episodeVal);
 
-    // Add metadata context if not explicitly substituted in the prompt
-    let contextMeta = "";
-    if (!interpolatedPrompt.includes(movieVal)) {
-      contextMeta += `Kino/Serial nomi: ${movieVal}. `;
-    }
-    if (!interpolatedPrompt.includes(episodeVal)) {
-      contextMeta += `Qism: ${episodeVal}-qism. `;
-    }
+      // Add metadata context if not explicitly substituted in the prompt
+      let contextMeta = "";
+      if (!interpolatedPrompt.includes(movieVal)) {
+        contextMeta += `Kino/Serial nomi: ${movieVal}. `;
+      }
+      if (!interpolatedPrompt.includes(episodeVal)) {
+        contextMeta += `Qism: ${episodeVal}-qism. `;
+      }
 
-    const customizableToneInstruction = `
+      const customizableToneInstruction = `
 [TRANSLATION STYLE & ROLE]
 ${interpolatedPrompt}
 
@@ -349,8 +357,8 @@ ${interpolatedPrompt}
 ${qualityPrompt || 'Translate naturally and contextually.'}
 `;
 
-    // Part 2: Immutable Technical and Formatting Instruction (not editable, strict formatting rules)
-    const immutableTechnicalInstruction = `
+      // Part 2: Immutable Technical and Formatting Instruction (not editable, strict formatting rules)
+      const immutableTechnicalInstruction = `
 [TECHNICAL FORMATTING INSTRUCTIONS - STRICTLY MANDATORY]
 You act as an automated subtitle translation pipeline. You will receive a JSON array of subtitle lines to translate.
 Your task is to translate the "text" field of each item into "${targetLanguage}".
@@ -371,178 +379,191 @@ Strict rules you MUST follow:
 7. Validity: Ensure the output is syntactically valid JSON. Properly escape double quotes, backslashes, and newlines in the translated text.
 `;
 
-    const combinedSystemInstruction = 
-      customizableToneInstruction.trim() + 
-      (contextMeta ? `\n\n[CONTEXT]\n${contextMeta.trim()}` : "") +
-      `\n\n` + 
-      immutableTechnicalInstruction.trim();
-      
-    const userPrompt = `Input Subtitle Lines to Translate:\n${JSON.stringify(payload)}`;
+      const combinedSystemInstruction = 
+        customizableToneInstruction.trim() + 
+        (contextMeta ? `\n\n[CONTEXT]\n${contextMeta.trim()}` : "") +
+        `\n\n` + 
+        immutableTechnicalInstruction.trim();
+        
+      const userPrompt = `Input Subtitle Lines to Translate:\n${JSON.stringify(payload)}`;
 
-    let chunkSuccess = false;
-    let chunkAttempts = 0;
-    const maxChunkAttempts = 20;
-    let lastError = null;
+      let chunkSuccess = false;
+      let chunkAttempts = 0;
+      const maxChunkAttempts = 20;
+      let lastError = null;
 
-    while (!chunkSuccess && chunkAttempts < maxChunkAttempts) {
-      let keyInfo;
-      try {
-        keyInfo = getAvailableKey(keys);
-      } catch (err) {
-        logger('ERROR', `API Key Selection Failed: ${err.message}`);
-        throw new Error(`TRANSLATION_FAILED: Barcha kiritilgan API kalitlar yaroqsiz! Tafsilot: ${err.message}`);
-      }
+      while (!chunkSuccess && chunkAttempts < maxChunkAttempts) {
+        let keyInfo;
+        try {
+          keyInfo = getAvailableKey(keys);
+        } catch (err) {
+          logger('ERROR', `API Key Selection Failed: ${err.message}`);
+          throw new Error(`TRANSLATION_FAILED: Barcha kiritilgan API kalitlar yaroqsiz! Tafsilot: ${err.message}`);
+        }
 
-      const { key: currentKey, waitTimeMs } = keyInfo;
+        const { key: currentKey, waitTimeMs } = keyInfo;
 
-      if (waitTimeMs > 0) {
-        logger('INFO', `[KEY ROTATION] All keys blocked. Waiting ${Math.ceil(waitTimeMs / 1000)}s for the next key to unblock...`);
-        // Notify progress about the wait
-        await onProgress({
-          total,
-          translated: translatedCount,
-          eta: `Limit kutilmoqda (${Math.ceil(waitTimeMs / 1000)}s)...`,
-          progressBar: `[${'█'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
-        });
-        await new Promise(resolve => setTimeout(resolve, waitTimeMs));
-        continue;
-      }
+        if (waitTimeMs > 0) {
+          logger('INFO', `[KEY ROTATION] All keys blocked. Waiting ${Math.ceil(waitTimeMs / 1000)}s for the next key to unblock...`);
+          // Notify progress about the wait
+          await onProgress({
+            total,
+            translated: translatedCount,
+            eta: `Limit kutilmoqda (${Math.ceil(waitTimeMs / 1000)}s)...`,
+            progressBar: `[${'█'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
+          });
+          await new Promise(resolve => setTimeout(resolve, waitTimeMs));
+          continue;
+        }
 
-      chunkAttempts++;
-      const ai = getAi(currentKey);
+        chunkAttempts++;
+        const ai = getAi(currentKey);
 
-      try {
-        const response = await ai.models.generateContent({
-          model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
-          contents: userPrompt,
-          config: {
-            systemInstruction: combinedSystemInstruction,
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.INTEGER },
-                  translated_text: { type: Type.STRING }
-                },
-                required: ['id', 'translated_text']
+        try {
+          const response = await ai.models.generateContent({
+            model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+            contents: userPrompt,
+            config: {
+              systemInstruction: combinedSystemInstruction,
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.INTEGER },
+                    translated_text: { type: Type.STRING }
+                  },
+                  required: ['id', 'translated_text']
+                }
               }
             }
+          });
+
+          const resText = response.text;
+          const results = JSON.parse(resText);
+
+          const newCacheEntries = [];
+          for (const item of results) {
+            const chunkItem = chunk.find(cItem => cItem.d.id === item.id);
+            if (chunkItem) {
+              chunkItem.d.translatedText = item.translated_text;
+
+              // Prepare cache entry
+              newCacheEntries.push({
+                fileHash,
+                lineIndex: chunkItem.originalIndex,
+                originalText: chunkItem.d.cleanText,
+                translatedText: item.translated_text,
+                targetLanguage
+              });
+            }
           }
-        });
 
-        const resText = response.text;
-        const results = JSON.parse(resText);
+          // Insert directly to MongoDB (bulk upsert)
+          await db.insertTranslationCacheEntries(newCacheEntries);
 
-        db.data.translationCache = db.data.translationCache || [];
+          chunkSuccess = true;
+        } catch (err) {
+          lastError = err;
+          const errMsg = err.message || '';
+          logger('WARNING', `[GEMINI API WARNING] Key failure (attempt ${chunkAttempts}): ${errMsg.substring(0, 150)}`);
 
-        for (const item of results) {
-          const chunkItem = chunk.find(cItem => cItem.d.id === item.id);
-          if (chunkItem) {
-            chunkItem.d.translatedText = item.translated_text;
+          // Check error type
+          const is429 = errMsg.includes('429') || 
+                        errMsg.includes('RESOURCE_EXHAUSTED') || 
+                        errMsg.includes('quota') || 
+                        errMsg.includes('limit exceeded') || 
+                        errMsg.includes('exhausted');
 
-            // Push to cache
-            db.data.translationCache.push({
-              id: `${fileHash}_${chunkItem.originalIndex}`,
-              fileHash,
-              lineIndex: chunkItem.originalIndex,
-              originalText: chunkItem.d.cleanText,
-              translatedText: item.translated_text,
-              targetLanguage
-            });
-          }
-        }
+          const isInvalid = errMsg.includes('API_KEY_INVALID') || 
+                            errMsg.includes('API key not valid') || 
+                            errMsg.includes('invalid API key') || 
+                            errMsg.includes('key not found') ||
+                            errMsg.includes('401') ||
+                            errMsg.includes('UNAUTHENTICATED') ||
+                            errMsg.includes('ACCOUNT_STATE_INVALID') ||
+                            errMsg.includes('deleted or disabled') ||
+                            errMsg.includes('service account') ||
+                            (errMsg.includes('API key') && (errMsg.includes('invalid') || errMsg.includes('expired')));
 
-        cleanupTranslationCache();
-        await db.save('translationCache');
+          const state = getKeyState(currentKey);
 
-        chunkSuccess = true;
-      } catch (err) {
-        lastError = err;
-        const errMsg = err.message || '';
-        logger('WARNING', `[GEMINI API WARNING] Key failure (attempt ${chunkAttempts}): ${errMsg.substring(0, 150)}`);
-
-        // Check error type
-        const is429 = errMsg.includes('429') || 
-                      errMsg.includes('RESOURCE_EXHAUSTED') || 
-                      errMsg.includes('quota') || 
-                      errMsg.includes('limit exceeded') || 
-                      errMsg.includes('exhausted');
-
-        const isInvalid = errMsg.includes('API_KEY_INVALID') || 
-                          errMsg.includes('API key not valid') || 
-                          errMsg.includes('invalid API key') || 
-                          errMsg.includes('key not found') ||
-                          errMsg.includes('401') ||
-                          errMsg.includes('UNAUTHENTICATED') ||
-                          errMsg.includes('ACCOUNT_STATE_INVALID') ||
-                          errMsg.includes('deleted or disabled') ||
-                          errMsg.includes('service account') ||
-                          (errMsg.includes('API key') && (errMsg.includes('invalid') || errMsg.includes('expired')));
-
-        const state = getKeyState(currentKey);
-
-        if (isInvalid) {
-          state.invalid = true;
-          logger('WARNING', `[KEY ROTATION] Key marked as INVALID.`);
-        } else if (is429) {
-          let cooldownMs = 60000;
-          const retryMatch = errMsg.match(/"retryDelay"\s*:\s*"(\d+)s"/) || errMsg.match(/retry in (\d+(?:\.\d+)?)s/i);
-          if (retryMatch) {
-            const retrySeconds = Math.ceil(parseFloat(retryMatch[1]));
-            cooldownMs = Math.min(retrySeconds * 1000 + 1000, 120000);
-          } else if (errMsg.includes('daily') || errMsg.includes('per day')) {
-            cooldownMs = 4 * 60 * 60 * 1000; // 4 hours for daily limits
-            logger('WARNING', `[KEY ROTATION] Key marked as DAILY LIMIT EXHAUSTED (4 hours cooldown).`);
+          if (isInvalid) {
+            state.invalid = true;
+            logger('WARNING', `[KEY ROTATION] Key marked as INVALID.`);
+          } else if (is429) {
+            let cooldownMs = 60000;
+            const retryMatch = errMsg.match(/"retryDelay"\s*:\s*"(\d+)s"/) || errMsg.match(/retry in (\d+(?:\.\d+)?)s/i);
+            if (retryMatch) {
+              const retrySeconds = Math.ceil(parseFloat(retryMatch[1]));
+              cooldownMs = Math.min(retrySeconds * 1000 + 1000, 120000);
+            } else if (errMsg.includes('daily') || errMsg.includes('per day')) {
+              cooldownMs = 4 * 60 * 60 * 1000; // 4 hours for daily limits
+              logger('WARNING', `[KEY ROTATION] Key marked as DAILY LIMIT EXHAUSTED (4 hours cooldown).`);
+            } else {
+              cooldownMs = 60000;
+            }
+            state.blockedUntil = Date.now() + cooldownMs;
+            logger('WARNING', `[KEY ROTATION] Key marked as BLOCKED for ${Math.ceil(cooldownMs / 1000)}s.`);
           } else {
-            cooldownMs = 60000;
+            state.blockedUntil = Date.now() + 5000;
+            logger('WARNING', `[KEY ROTATION] Key temporary failure. Cooldown: 5s.`);
           }
-          state.blockedUntil = Date.now() + cooldownMs;
-          logger('WARNING', `[KEY ROTATION] Key marked as BLOCKED for ${Math.ceil(cooldownMs / 1000)}s.`);
-        } else {
-          state.blockedUntil = Date.now() + 5000;
-          logger('WARNING', `[KEY ROTATION] Key temporary failure. Cooldown: 5s.`);
-        }
 
-        // Notify progress about switching key
-        await onProgress({
-          total,
-          translated: translatedCount,
-          eta: `Kalit almashtirilmoqda...`,
-          progressBar: `[${'█'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
-        });
+          // Notify progress about switching key
+          await onProgress({
+            total,
+            translated: translatedCount,
+            eta: `Kalit almashtirilmoqda...`,
+            progressBar: `[${'█'.repeat(Math.round(10 * (translatedCount / total)))}${'░'.repeat(10 - Math.round(10 * (translatedCount / total)))}]`
+          });
+        }
+      }
+
+      if (!chunkSuccess) {
+        logger('ERROR', `Translation failed for chunk after ${chunkAttempts} attempts. Last error: ${lastError ? lastError.message || lastError : 'Unknown'}`);
+        throw new Error(`TRANSLATION_FAILED: Tarjima serveri band yoki barcha kalit limitlari tugadi. (Oxirgi xato: ${lastError ? lastError.message || lastError : 'Unknown'})`);
+      }
+
+      // Update progress
+      translatedCount += chunk.length;
+      const progress = translatedCount / total;
+      const elapsed = Date.now() - startTime;
+      const actualTranslatedCount = translatedCount - (total - untranslatedDialogues.length);
+      const rate = actualTranslatedCount > 0 ? elapsed / actualTranslatedCount : 0;
+      const remainingTime = (total - translatedCount) * rate;
+      const etaSec = Math.round(remainingTime / 1000);
+      const etaStr = etaSec > 0 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : '0s';
+
+      const barLength = 10;
+      const filled = Math.round(barLength * progress);
+      const empty = barLength - filled;
+      const progressBar = `[${'█'.repeat(filled)}${'░'.repeat(empty)}] ${Math.round(progress * 100)}%`;
+
+      await onProgress({
+        total,
+        translated: translatedCount,
+        eta: etaStr,
+        progressBar
+      });
+
+      if (maxConcurrency === 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
     }
-
-    if (!chunkSuccess) {
-      logger('ERROR', `Translation failed for chunk after ${chunkAttempts} attempts. Last error: ${lastError ? lastError.message || lastError : 'Unknown'}`);
-      throw new Error(`TRANSLATION_FAILED: Tarjima serveri band yoki barcha kalit limitlari tugadi. (Oxirgi xato: ${lastError ? lastError.message || lastError : 'Unknown'})`);
-    }
-
-    translatedCount += chunk.length;
-    const progress = translatedCount / total;
-    const elapsed = Date.now() - startTime;
-    const actualTranslatedCount = translatedCount - (total - untranslatedDialogues.length);
-    const rate = actualTranslatedCount > 0 ? elapsed / actualTranslatedCount : 0;
-    const remainingTime = (total - translatedCount) * rate;
-    const etaSec = Math.round(remainingTime / 1000);
-    const etaStr = etaSec > 0 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : '0s';
-
-    const barLength = 10;
-    const filled = Math.round(barLength * progress);
-    const empty = barLength - filled;
-    const progressBar = `[${'█'.repeat(filled)}${'░'.repeat(empty)}] ${Math.round(progress * 100)}%`;
-
-    await onProgress({
-      total,
-      translated: translatedCount,
-      eta: etaStr,
-      progressBar
-    });
-
-    await new Promise(resolve => setTimeout(resolve, 1000));
   }
+
+  // Start concurrent worker promises
+  const workers = [];
+  for (let i = 0; i < maxConcurrency; i++) {
+    workers.push(translationWorker());
+  }
+
+  // Wait for all workers to finish
+  await Promise.all(workers);
 
   logger('SUCCESS', `Translation completed successfully for file hash: ${fileHash}`);
   return rebuildSubtitles(parsed, ext);
