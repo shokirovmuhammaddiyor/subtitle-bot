@@ -149,6 +149,25 @@ export async function startQrLogin(apiId, apiHash) {
     try { client.disconnect(); } catch (e) {}
   });
 
+  const authInterval = setInterval(async () => {
+    try {
+      if (!qrSessions.has(sessionId) || qrSession.status === 'CONNECTED' || qrSession.status === 'ERROR') {
+        clearInterval(authInterval);
+        return;
+      }
+      const isAuthorized = await client.isUserAuthorized().catch(() => false);
+      if (isAuthorized) {
+        clearInterval(authInterval);
+        const me = await client.getMe().catch(() => null);
+        qrSession.phone = me && me.phone ? `+${me.phone}` : (me && me.username ? `@${me.username}` : 'Connected');
+        qrSession.sessionString = client.session.save();
+        qrSession.status = 'CONNECTED';
+      }
+    } catch (e) {
+      // Ignore errors during check
+    }
+  }, 2000);
+
   return sessionId;
 }
 

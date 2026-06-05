@@ -80,19 +80,19 @@ if (db && db.data) {
     db.data.settings = {};
   }
 
-  if (db.data.settings.botToken && !process.env.BOT_TOKEN) {
+  if (db.data.settings.botToken) {
     process.env.BOT_TOKEN = db.data.settings.botToken;
   }
-  if (db.data.settings.geminiApiKey && !process.env.GEMINI_API_KEY) {
+  if (db.data.settings.geminiApiKey) {
     process.env.GEMINI_API_KEY = db.data.settings.geminiApiKey;
   }
-  if (db.data.settings.aiModel && !process.env.GEMINI_MODEL) {
+  if (db.data.settings.aiModel) {
     process.env.GEMINI_MODEL = db.data.settings.aiModel;
   }
-  if (db.data.settings.telegramApiId && !process.env.TELEGRAM_API_ID) {
+  if (db.data.settings.telegramApiId) {
     process.env.TELEGRAM_API_ID = db.data.settings.telegramApiId;
   }
-  if (db.data.settings.telegramApiHash && !process.env.TELEGRAM_API_HASH) {
+  if (db.data.settings.telegramApiHash) {
     process.env.TELEGRAM_API_HASH = db.data.settings.telegramApiHash;
   }
 
@@ -1286,12 +1286,12 @@ app.get('/api/admin/telegram-client/status', async (req, res) => {
 app.post('/api/admin/telegram-client/send-code', async (req, res) => {
   try {
     const { phone, apiId, apiHash } = req.body;
-    const finalApiId = apiId || process.env.TELEGRAM_API_ID;
-    const finalApiHash = apiHash || process.env.TELEGRAM_API_HASH;
+    const s = await db.getSettings();
+    const finalApiId = apiId || s.telegramApiId || process.env.TELEGRAM_API_ID;
+    const finalApiHash = apiHash || s.telegramApiHash || process.env.TELEGRAM_API_HASH;
     if (!phone || !finalApiId || !finalApiHash) {
       return res.status(400).json({ error: 'Telegram Telefon raqami, API ID va API Hash kiritilishi shart' });
     }
-    const s = await db.getSettings();
     await sendCode(phone.trim(), String(finalApiId).trim(), String(finalApiHash).trim());
     s.telegram_account = {
       phone: phone.trim(),
@@ -1371,8 +1371,9 @@ app.post('/api/admin/telegram-client/disconnect', async (req, res) => {
 app.post('/api/admin/telegram-client/qr-start', async (req, res) => {
   try {
     const { apiId, apiHash } = req.body;
-    const finalApiId = apiId || process.env.TELEGRAM_API_ID;
-    const finalApiHash = apiHash || process.env.TELEGRAM_API_HASH;
+    const s = await db.getSettings();
+    const finalApiId = apiId || s.telegramApiId || process.env.TELEGRAM_API_ID;
+    const finalApiHash = apiHash || s.telegramApiHash || process.env.TELEGRAM_API_HASH;
     if (!finalApiId || !finalApiHash) {
       return res.status(400).json({ error: 'Telegram API ID va API Hash kiritilishi shart' });
     }
@@ -1393,8 +1394,8 @@ app.get('/api/admin/telegram-client/qr-status', async (req, res) => {
       s.telegram_account = {
         phone: status.phone || 'QR Akkaunt',
         status: 'CONNECTED',
-        apiId: s.telegram_account?.apiId || process.env.TELEGRAM_API_ID || '',
-        apiHash: s.telegram_account?.apiHash || process.env.TELEGRAM_API_HASH || '',
+        apiId: s.telegram_account?.apiId || s.telegramApiId || process.env.TELEGRAM_API_ID || '',
+        apiHash: s.telegram_account?.apiHash || s.telegramApiHash || process.env.TELEGRAM_API_HASH || '',
         session: status.sessionString,
         createdAt: Date.now()
       };
@@ -1428,8 +1429,8 @@ app.post('/api/admin/telegram-client/qr-verify-2fa', async (req, res) => {
     s.telegram_account = {
       phone: result.phone || 'QR Akkaunt',
       status: 'CONNECTED',
-      apiId: s.telegram_account?.apiId || process.env.TELEGRAM_API_ID || '',
-      apiHash: s.telegram_account?.apiHash || process.env.TELEGRAM_API_HASH || '',
+      apiId: s.telegram_account?.apiId || s.telegramApiId || process.env.TELEGRAM_API_ID || '',
+      apiHash: s.telegram_account?.apiHash || s.telegramApiHash || process.env.TELEGRAM_API_HASH || '',
       session: result.sessionString,
       createdAt: Date.now()
     };
