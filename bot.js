@@ -46,6 +46,39 @@ function getCleanChannelId(channelId) {
   return cid;
 }
 
+async function getAria2cPath() {
+  if (process.env.ARIA2C_PATH) {
+    try {
+      await fs.access(process.env.ARIA2C_PATH);
+      return process.env.ARIA2C_PATH;
+    } catch (e) {
+      logEvent('WARNING', `Ko'rsatilgan ARIA2C_PATH (${process.env.ARIA2C_PATH}) topilmadi: ${e.message}`);
+    }
+  }
+  
+  const commonPaths = [
+    '/usr/bin/aria2c',
+    '/usr/local/bin/aria2c',
+    '/usr/sbin/aria2c',
+    '/bin/aria2c'
+  ];
+  for (const p of commonPaths) {
+    try {
+      await fs.access(p);
+      return p;
+    } catch (e) {}
+  }
+
+  try {
+    const { stdout } = await execPromise('which aria2c');
+    if (stdout && stdout.trim()) {
+      return stdout.trim();
+    }
+  } catch (e) {}
+
+  return 'aria2c';
+}
+
 function getGramJSPeer(channelId) {
   const cleanId = getCleanChannelId(channelId);
   if (!cleanId) return null;
@@ -738,6 +771,10 @@ app.post('/api/admin/import-config', async (req, res) => {
 let cachedHealthData = null;
 let cachedHealthTime = 0;
 let cachedHealthKeys = '';
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', uptime: process.uptime() });
+});
 
 app.get('/api/health', async (req, res) => {
   const keysInput = process.env.GEMINI_API_KEY || '';
@@ -1640,6 +1677,28 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`  Network (IP):    http://127.0.0.1:${PORT}`);
   }
   console.log(`  Default Port:     3452 (Optimized to listen on ${PORT} for sandboxed Cloud Environment routing)`);
+  
+  // Keep-Alive mechanism to prevent Render spin-down
+  const externalUrl = process.env.RENDER_EXTERNAL_URL || process.env.PING_URL;
+  if (externalUrl) {
+    console.log(`  Keep-Alive:       Pinging ${externalUrl} every 10 minutes`);
+    setInterval(async () => {
+      try {
+        const pingUrl = `${externalUrl.replace(/\/$/, '')}/health`;
+        const pRes = await fetch(pingUrl);
+        if (pRes.ok) {
+          logEvent('INFO', `[Keep-Alive] Ping successfully sent to ${pingUrl}. Status: ${pRes.status}`);
+        } else {
+          logEvent('WARNING', `[Keep-Alive] Ping sent to ${pingUrl} returned status ${pRes.status}`);
+        }
+      } catch (err) {
+        logEvent('ERROR', `[Keep-Alive] Failed to ping self: ${err.message}`);
+      }
+    }, 10 * 60 * 1000);
+  } else {
+    console.log(`  Keep-Alive:       Disabled (RENDER_EXTERNAL_URL or PING_URL not set)`);
+  }
+  
   console.log(`  -----------------------------------------\n`);
 });
 
@@ -3912,10 +3971,14 @@ function findRssItemForSchedule(item, rssItems) {
   });
 }
 
-function downloadMkvWithAria2(pendingItem, downloadDir) {
+async function downloadMkvWithAria2(pendingItem, downloadDir) {
+  const aria2cPath = await getAria2cPath();
+  const absoluteDownloadDir = path.resolve(downloadDir);
+  const absoluteCwd = process.cwd();
+
   return new Promise((resolve, reject) => {
     const args = [
-      '--dir=' + downloadDir,
+      '--dir=' + absoluteDownloadDir,
       '--seed-time=0',
       '--follow-torrent=mem',
       '--bt-stop-timeout=180',
@@ -3923,8 +3986,8 @@ function downloadMkvWithAria2(pendingItem, downloadDir) {
       pendingItem.magnet
     ];
 
-    logEvent('INFO', `[Aria2c] Starting download for: ${pendingItem.title} to ${downloadDir}`);
-    const child = spawn('aria2c', args);
+    logEvent('INFO', `[Aria2c] Starting download for: ${pendingItem.title} to ${absoluteDownloadDir} using path ${aria2cPath}`);
+    const child = spawn(aria2cPath, args, { cwd: absoluteCwd });
 
     // Set 5 minutes timeout to prevent hanging forever on peers/metadata resolution
     const timeout = setTimeout(() => {
@@ -3957,7 +4020,18 @@ function downloadMkvWithAria2(pendingItem, downloadDir) {
 
     child.on('error', (err) => {
       clearTimeout(timeout);
-      reject(err);
+      if (err.code === 'ENOENT') {
+        const detailedError = new Error(
+          `Aria2c binariysi topilmadi ('${aria2cPath}'). ` +
+          `Render.com platformasida bepul reja uchun Docker orqali deploy qilish tavsiya etiladi (Dockerfile tizimli paketlarni avtomatik o'rnatadi). ` +
+          `Agar mahalliy ishlatayotgan bo'lsangiz, aria2 o'rnatilganligini va PATH'ga qo'shilganligini yoki ARIA2C_PATH o'zgaruvchisi sozlanganligini tekshiring.`
+        );
+        logEvent('ERROR', `[Aria2c Spawn Error] ${detailedError.message}`);
+        reject(detailedError);
+      } else {
+        logEvent('ERROR', `[Aria2c Spawn Error] ${err.message}`);
+        reject(err);
+      }
     });
 
     child.on('close', (code) => {
