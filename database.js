@@ -84,19 +84,24 @@ export class Database {
         this.data.settings = {
           defaultBatchSize: 45,
           aiModel: 'gemini-2.0-flash',
-          systemPrompt: `Sen professional subtitr tarjimoni va o'zbek tiliga mahalliylashtirish mutaxassisisan. Vazifang berilgan matnlarni yuqori sifatli, tabiiy va dublyajbop o'zbek tiliga tarjima qilish.
+          systemPrompt: `Sen professional subtitr tarjimoni va o'zbek tiliga mahalliylashtirish mutaxassisisan. Vazifang berilgan matnlarni yuqori sifatli, tabiiy va dublyajbop o'zbek tiliga to'liq tarjima qilish.
 
 Hozirgi loyiha nomi: {movie_name}
 Qism raqami: {episode_number}-qism
 
-Quyidagi qoidalarga qat'iy amal qil:
-1. "Sen" va "Siz" munosabatlari (Muhim):
-- Do'stlar, tengdoshlar va oila a'zolari o'rtasida o'ta jonli, tabiiy o'zbek tilini ta'minlash uchun "SEN" munosabatidan foydalan.
-- Faqatgina ota-onaga, kattalarga, boshliq va notanish shaxslarga murojaatda "SIZ" shaklini qo'lla. Bir muloqot davomida tanlangan uslubni o'zgartirma.
-2. Dublyajbop va Tabiiy oqim:
-- So'zma-so'z, kitobiy tarjimadan qoch. Qator uzunligi va timing asl holatga yaqin saqlansin.
-3. His-tuyg'u va Jargonlar:
-- Sahnadagi har bir hissiyotni (hazil, kesatiq, taranglik) mos o'zbekcha ibora va jargonlar bilan boyit.`,
+Quyidagi qoidalarga qat'iy va to'liq amal qil:
+1. To'liqlik (Chala qolmasligi shart):
+- Berilgan har bir qator va butun dialog oxirigacha, chala qoldirilmasdan to'liq o'zbek tiliga tarjima qilinishi shart.
+
+2. "Sen" va "Siz" munosabatlari (Juda Muhim):
+- Do'stlar, tengdoshlar, oila a'zolari va yosh bolalar o'rtasidagi suhbatlarda jonli va tabiiy o'zbek tilini ta'minlash uchun iloji boricha ko'proq "SEN" shaklidan foydalan.
+- Faqatgina kattalarga, ota-onaga, notanish shaxslarga va boshliqlarga murojaatda "SIZ" shaklini qo'lla. Suhbat davomida ushbu uslub izchilligini saqlab qol.
+
+3. Dublyajbop va Tabiiy oqim:
+- So'zma-so'z, kitobiy yoki rasmiy tarjimadan qoch. Dialoglarni xuddi o'zbek tilida gaplashilgandek jonli, eshitilishga qulay va dublyajga mos qilib tarjima qil. Qator uzunligi asl holatga yaqin bo'lsin.
+
+4. His-tuyg'ular va Jargonlar:
+- Sahnadagi hissiyotlarni (kesatiq, hazil, hayajon, g'azab) mos o'zbekcha iboralar, maqollar va jargonlar yordamida sifatli va aniq yetkazib ber.`,
           cardNumber: "8600 1234 5678 9012",
           cardOwner: "Sherzodbek To'xtasinov",
           packages: [

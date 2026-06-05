@@ -304,8 +304,22 @@ export async function translateSubtitles({
     const chunk = chunks[c];
     const payload = chunk.map(item => ({ id: item.d.id, text: item.d.cleanText }));
     
-    // Interpolate dynamic placeholders like {movie_name}, {project_title}, {kino_nomi}, {episode_number}, {qism_raqami}
-    let interpolatedPrompt = systemPrompt || "Do'stona va erkin uslubda tarjima qil. Ma'noni to'liq yetkaz va o'zbekcha jargonlarni o'rnida ishlat.";
+    // Part 1: Customizable Translation Tone & Persona Instructions (editable from panel/settings)
+    let interpolatedPrompt = systemPrompt || `Sen professional subtitr tarjimoni va o'zbek tiliga mahalliylashtirish mutaxassisisan. Vazifang berilgan matnlarni yuqori sifatli, tabiiy va dublyajbop o'zbek tiliga to'liq tarjima qilish.
+
+Quyidagi qoidalarga qat'iy va to'liq amal qil:
+1. To'liqlik (Chala qolmasligi shart):
+- Berilgan har bir qator va butun dialog oxirigacha, chala qoldirilmasdan to'liq o'zbek tiliga tarjima qilinishi shart.
+
+2. "Sen" va "Siz" munosabatlari (Juda Muhim):
+- Do'stlar, tengdoshlar, oila a'zolari va yosh bolalar o'rtasidagi suhbatlarda jonli va tabiiy o'zbek tilini ta'minlash uchun iloji boricha ko'proq "SEN" shaklidan foydalan.
+- Faqatgina kattalarga, ota-onaga, notanish shaxslarga va boshliqlarga murojaatda "SIZ" shaklini qo'lla. Suhbat davomida ushbu uslub izchilligini saqlab qol.
+
+3. Dublyajbop va Tabiiy oqim:
+- So'zma-so'z, kitobiy yoki rasmiy tarjimadan qoch. Dialoglarni xuddi o'zbek tilida gaplashilgandek jonli, eshitilishga qulay va dublyajga mos qilib tarjima qil. Qator uzunligi asl holatga yaqin bo'lsin.
+
+4. His-tuyg'ular va Jargonlar:
+- Sahnadagi hissiyotlarni (kesatiq, hazil, hayajon, g'azab) mos o'zbekcha iboralar, maqollar va jargonlar yordamida sifatli va aniq yetkazib ber.`;
     const movieVal = projectTitle || "Noma'lum kino/serial";
     const episodeVal = episodeNumber || "1";
 
@@ -327,11 +341,43 @@ export async function translateSubtitles({
       contextMeta += `Qism: ${episodeVal}-qism. `;
     }
 
-    const combinedSystemInstruction = interpolatedPrompt + 
-      (contextMeta ? `\nUshbu matn haqida ma'lumot: ${contextMeta}` : "") +
-      "\n\nReturn ONLY a valid JSON array format, completely adhering to the schema rules: [{\"id\": 1, \"translated_text\": \"translated text here\"}]. No markdown wrapping blocks, no chat explanations, and no trailing characters.";
+    const customizableToneInstruction = `
+[TRANSLATION STYLE & ROLE]
+${interpolatedPrompt}
+
+[SPECIFIC TONE & QUALITY CONSTRAINTS]
+${qualityPrompt || 'Translate naturally and contextually.'}
+`;
+
+    // Part 2: Immutable Technical and Formatting Instruction (not editable, strict formatting rules)
+    const immutableTechnicalInstruction = `
+[TECHNICAL FORMATTING INSTRUCTIONS - STRICTLY MANDATORY]
+You act as an automated subtitle translation pipeline. You will receive a JSON array of subtitle lines to translate.
+Your task is to translate the "text" field of each item into "${targetLanguage}".
+
+Strict rules you MUST follow:
+1. Output format: You MUST return ONLY a raw JSON array.
+2. Do NOT wrap the JSON in markdown code fences (e.g. do NOT write \`\`\`json ... \`\`\`). Do NOT output any markdown backticks.
+3. No conversational text: Do NOT write any greetings, chat explanations, prefaces, notes, or post-processing commentary. The response must contain nothing but the JSON array.
+4. Input-to-Output mapping: For every item in the input array, you MUST output a corresponding item. The number of elements in the output JSON array MUST exactly equal the number of elements in the input JSON array.
+5. Preserving IDs: You MUST preserve the exact "id" of each item.
+6. JSON Schema: The output must strictly conform to this JSON schema:
+   [
+     {
+       "id": <number>,
+       "translated_text": "<translated string>"
+     }
+   ]
+7. Validity: Ensure the output is syntactically valid JSON. Properly escape double quotes, backslashes, and newlines in the translated text.
+`;
+
+    const combinedSystemInstruction = 
+      customizableToneInstruction.trim() + 
+      (contextMeta ? `\n\n[CONTEXT]\n${contextMeta.trim()}` : "") +
+      `\n\n` + 
+      immutableTechnicalInstruction.trim();
       
-    const userPrompt = `Context/Tone constraints: ${qualityPrompt || 'Translate naturally.'}\n\nTask: Translate the following subtitle lines to ${targetLanguage}. Keep structural meaning and emotion. Return matching count & IDs.\n\nJSON array:\n${JSON.stringify(payload)}`;
+    const userPrompt = `Input Subtitle Lines to Translate:\n${JSON.stringify(payload)}`;
 
     let chunkSuccess = false;
     let chunkAttempts = 0;
