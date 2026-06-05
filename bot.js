@@ -18,7 +18,9 @@ import { translateSubtitles, resetAi, setLogger } from './service.js';
 // Programmatically kill duplicate bot processes to avoid 409 conflicts and double handler execution
 exec(`pgrep -f "bot.js"`, (err, stdout) => {
   if (stdout) {
-    const pids = stdout.split('\n').map(p => parseInt(p.trim())).filter(p => !isNaN(p) && p !== process.pid);
+    const pids = stdout.split('\n')
+      .map(p => parseInt(p.trim()))
+      .filter(p => !isNaN(p) && p !== process.pid && p !== process.ppid);
     for (const pid of pids) {
       try {
         process.kill(pid, 'SIGKILL');
@@ -66,6 +68,7 @@ let systemLogs = [
 
 function logEvent(type, message) {
   const time = new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  console.log(`[${time}] [${type}] ${message}`);
   systemLogs.unshift({ time, type, message });
   if (systemLogs.length > 50) systemLogs.pop();
 }
@@ -125,6 +128,19 @@ if (db && db.data) {
   if (db.data.automatedAnimes.length === 0) {
     db.data.automatedAnimes = [];
     db.save();
+  } else {
+    let updatedAny = false;
+    db.data.automatedAnimes.forEach(item => {
+      if (['DOWNLOADING', 'EXTRACTING', 'TRANSLATING', 'UPLOADING'].includes(item.status)) {
+        item.status = 'PENDING';
+        item.progress = 0;
+        item.eta = 'Navbatda turibdi (Qayta tiklandi)...';
+        updatedAny = true;
+      }
+    });
+    if (updatedAny) {
+      db.save('automatedAnimes');
+    }
   }
 }
 
@@ -1628,8 +1644,19 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 let activeBotInstance = null;
+let currentBotToken = null;
 
 async function restartBot(token) {
+  if (!token || token.trim() === '' || token.includes('dummy')) {
+    logEvent('WARNING', 'Telegram Bot Token is dummy or empty. Configure a valid token in the settings panel.');
+    return;
+  }
+
+  if (activeBotInstance && token === currentBotToken) {
+    logEvent('INFO', 'Telegram Bot is already running with this token. Skipping restart.');
+    return;
+  }
+
   if (activeBotInstance) {
     try {
       logEvent('INFO', 'Stopping running Telegraf Bot instance...');
@@ -1637,11 +1664,6 @@ async function restartBot(token) {
     } catch (e) {
       logEvent('ERROR', `Error stopping bot: ${e.message}`);
     }
-  }
-
-  if (!token || token.trim() === '' || token.includes('dummy')) {
-    logEvent('WARNING', 'Telegram Bot Token is dummy or empty. Configure a valid token in the settings panel.');
-    return;
   }
 
   try {
@@ -1664,6 +1686,7 @@ async function restartBot(token) {
       });
 
     activeBotInstance = bot;
+    currentBotToken = token;
   } catch (err) {
     logEvent('ERROR', `Failed to construct Telegraf: ${err.message}`);
   }
@@ -3513,7 +3536,7 @@ async function runTranslation(ctx, user) {
   let fileHash = '';
   try {
     const { getRemainingTokenCount } = await import('./service.js');
-    const res = getRemainingTokenCount(session.fileContent, session.fileExt, session.targetLanguage);
+    const res = await getRemainingTokenCount(session.fileContent, session.fileExt, session.targetLanguage);
     totalDialoguesCount = res.total;
     requiredTokens = res.remaining;
     fileHash = res.fileHash;
@@ -3534,9 +3557,7 @@ async function runTranslation(ctx, user) {
     }
     if (!isResumeValid) {
       logEvent('WARNING', `Resume kesh topildi, lekin chala tarjima fayli storage kanalda topilmadi. Tarjima yangidan boshlanadi.`);
-      db.data.translationCache = (db.data.translationCache || []).filter(
-        entry => entry.fileHash !== fileHash || entry.targetLanguage !== session.targetLanguage
-      );
+      await db.clearTranslationCache(fileHash, session.targetLanguage);
       delete db.data.translationCacheMetadata[fileHash];
       await db.save();
       requiredTokens = totalDialoguesCount;
@@ -3745,10 +3766,7 @@ async function runTranslation(ctx, user) {
       const parsedObj = parseSubtitles(session.fileContent, session.fileExt);
       const computedHash = crypto.createHash('sha256').update(session.fileContent).digest('hex');
       
-      db.data.translationCache = db.data.translationCache || [];
-      const cachedEntries = db.data.translationCache.filter(
-        entry => entry.fileHash === computedHash && entry.targetLanguage === session.targetLanguage
-      );
+      const cachedEntries = await db.getTranslationCache(computedHash, session.targetLanguage);
       
       if (cachedEntries.length > 0) {
         const cacheMap = new Map();
@@ -3928,7 +3946,7 @@ function downloadMkvWithAria2(pendingItem, downloadDir) {
           lastProgress = progress;
           pendingItem.progress = progress;
           pendingItem.eta = `Yuklanmoqda: ${progress}% (ETA: ${eta})`;
-          await db.save('automatedAnimes');
+          db.save('automatedAnimes').catch(e => {});
         }
       }
     });
@@ -4050,7 +4068,7 @@ async function runAutomatedAnimeWorker() {
           db.data.automatedAnimes.forEach((item, index) => {
             item.visible = (index < 25);
           });
-          await db.save('automatedAnimes');
+          db.save('automatedAnimes').catch(e => {});
         }
       } catch (err) {
         logEvent('ERROR', `[Fetch Error] ${err.message}`);
@@ -4068,7 +4086,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'DOWNLOADING';
         pendingItem.progress = 0;
         pendingItem.eta = 'Kutilmoqda...';
-        await db.save('automatedAnimes');
+        db.save('automatedAnimes').catch(e => {});
 
         if (!pendingItem.magnet) {
           throw new Error('Magnet link is missing in the database entry.');
@@ -4086,7 +4104,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'EXTRACTING';
         pendingItem.progress = 50;
         pendingItem.eta = 'Subtitrlar chiqarib olinmoqda...';
-        await db.save('automatedAnimes');
+        db.save('automatedAnimes').catch(e => {});
 
         const extractedSubPath = path.join(downloadDir, 'extracted.ass');
         await extractSubtitle(mkvPath, extractedSubPath);
@@ -4099,7 +4117,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'TRANSLATING';
         pendingItem.progress = 0;
         pendingItem.eta = 'Gemini tarjima boshlandi...';
-        await db.save('automatedAnimes');
+        db.save('automatedAnimes').catch(e => {});
 
         const subContent = await fs.readFile(extractedSubPath, 'utf8');
         const translatedSubContent = await translateSubtitles({
@@ -4114,7 +4132,7 @@ async function runAutomatedAnimeWorker() {
           onProgress: async ({ total, translated, eta, progressBar }) => {
             pendingItem.progress = Math.min(Math.round((translated / total) * 100), 100);
             pendingItem.eta = `Tarjima: ${translated}/${total} (${eta} qoldi)`;
-            await db.save('automatedAnimes');
+            db.save('automatedAnimes').catch(e => {});
           }
         });
 
@@ -4124,7 +4142,7 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'UPLOADING';
         pendingItem.progress = 80;
         pendingItem.eta = 'Telegramga yuklanmoqda...';
-        await db.save('automatedAnimes');
+        db.save('automatedAnimes').catch(e => {});
 
         logEvent('INFO', `[Upload] Uploading subtitle: ${pendingItem.subName}`);
         const uploadSubRes = await uploadFileToChannel(pendingItem.subName, translatedSubPath, 'subtitle', true);
@@ -4147,14 +4165,14 @@ async function runAutomatedAnimeWorker() {
         pendingItem.status = 'COMPLETED';
         pendingItem.progress = 100;
         pendingItem.eta = 'Bajarildi';
-        await db.save('automatedAnimes');
+        db.save('automatedAnimes').catch(e => {});
         logEvent('SUCCESS', `[Queue Worker] Finished automated pipeline for: ${pendingItem.title} - ${pendingItem.episode}`);
 
       } catch (err) {
         pendingItem.status = 'FAILED';
         pendingItem.progress = 0;
         pendingItem.eta = `Xatolik: ${err.message}`;
-        await db.save('automatedAnimes');
+        db.save('automatedAnimes').catch(e => {});
         logEvent('ERROR', `[Queue Worker] Pipeline failed for ${pendingItem.title} - ${pendingItem.episode}: ${err.message}`);
       } finally {
         await fs.rm(downloadDir, { recursive: true, force: true }).catch(err => {

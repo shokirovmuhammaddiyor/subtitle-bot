@@ -40,7 +40,11 @@ function getAvailableKey(keys) {
     throw new Error('All configured Gemini API keys are invalid.');
   }
 
-  const activeKeys = validKeys.filter(k => getKeyState(k).blockedUntil <= now);
+  // Filter keys that are not blocked and have been idle for at least 20 seconds
+  const activeKeys = validKeys.filter(k => {
+    const state = getKeyState(k);
+    return state.blockedUntil <= now && (now - state.lastUsed) >= 20000;
+  });
 
   if (activeKeys.length > 0) {
     // Select the key that was used the least recently to distribute load evenly
@@ -57,19 +61,32 @@ function getAvailableKey(keys) {
     return { key: chosenKey, waitTimeMs: 0 };
   }
 
-  // All valid keys are blocked, find the one with the earliest unblock time
+  // All keys are either blocked or have been used within the last 20 seconds.
+  // Find the key that will be available the earliest (considering both blockedUntil and the 20s delay).
   let bestKey = validKeys[0];
-  let minBlockedUntil = getKeyState(bestKey).blockedUntil;
+  let minWaitTime = Infinity;
+
   for (const key of validKeys) {
     const state = getKeyState(key);
-    if (state.blockedUntil < minBlockedUntil) {
-      minBlockedUntil = state.blockedUntil;
+    const timeUntilBlocked = Math.max(0, state.blockedUntil - now);
+    const timeSinceLastUsed = now - state.lastUsed;
+    const timeUntilCooldown = Math.max(0, 20000 - timeSinceLastUsed);
+    const waitTimeForThisKey = Math.max(timeUntilBlocked, timeUntilCooldown);
+    
+    if (waitTimeForThisKey < minWaitTime) {
+      minWaitTime = waitTimeForThisKey;
       bestKey = key;
     }
   }
 
-  const waitTimeMs = Math.max(0, minBlockedUntil - now);
-  return { key: bestKey, waitTimeMs };
+  const finalWait = minWaitTime === Infinity ? 0 : minWaitTime;
+  if (finalWait > 0) {
+    getKeyState(bestKey).lastUsed = now + finalWait;
+  } else {
+    getKeyState(bestKey).lastUsed = now;
+  }
+
+  return { key: bestKey, waitTimeMs: finalWait };
 }
 
 export function cleanupTranslationCache() {
@@ -88,15 +105,12 @@ export function cleanupTranslationCache() {
   }
 }
 
-export function getRemainingTokenCount(content, ext, targetLanguage) {
+export async function getRemainingTokenCount(content, ext, targetLanguage) {
   const parsed = parseSubtitles(content, ext);
   const dialogues = parsed.filter(l => l.isDialogue);
   const fileHash = crypto.createHash('sha256').update(content).digest('hex');
 
-  db.data.translationCache = db.data.translationCache || [];
-  const cachedEntries = db.data.translationCache.filter(
-    entry => entry.fileHash === fileHash && entry.targetLanguage === targetLanguage
-  );
+  const cachedEntries = await db.getTranslationCache(fileHash, targetLanguage);
 
   const cacheMap = new Map();
   for (const entry of cachedEntries) {
@@ -248,10 +262,7 @@ export async function translateSubtitles({
   const fileHash = crypto.createHash('sha256').update(content).digest('hex');
 
   // Load from translationCache
-  db.data.translationCache = db.data.translationCache || [];
-  const cachedEntries = db.data.translationCache.filter(
-    entry => entry.fileHash === fileHash && entry.targetLanguage === targetLanguage
-  );
+  const cachedEntries = await db.getTranslationCache(fileHash, targetLanguage);
 
   const cacheMap = new Map();
   for (const entry of cachedEntries) {
@@ -460,8 +471,10 @@ Strict rules you MUST follow:
             }
           }
 
-          // Insert directly to MongoDB (bulk upsert)
-          await db.insertTranslationCacheEntries(newCacheEntries);
+          // Insert directly to MongoDB (bulk upsert, async background save)
+          db.insertTranslationCacheEntries(newCacheEntries).catch(err => {
+            logger('ERROR', `Failed to insert cache entries: ${err.message}`);
+          });
 
           chunkSuccess = true;
         } catch (err) {
@@ -549,9 +562,9 @@ Strict rules you MUST follow:
       });
 
       if (maxConcurrency === 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 50));
       } else {
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 20));
       }
     }
   }

@@ -45,7 +45,7 @@ export class Database {
 
       const collections = [
         'users', 'projects', 'episodes', 'teams', 'payments', 
-        'ratings', 'automatedAnimes', 'promocodes', 'backups', 'translationCache'
+        'ratings', 'automatedAnimes', 'promocodes', 'backups'
       ];
 
       for (const colName of collections) {
@@ -148,7 +148,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
 
         let collectionsToSync = [
           'users', 'projects', 'episodes', 'teams', 'payments', 
-          'ratings', 'automatedAnimes', 'promocodes', 'backups', 'translationCache',
+          'ratings', 'automatedAnimes', 'promocodes', 'backups',
           'settings', 'translationCacheMetadata'
         ];
 
@@ -272,6 +272,32 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
       delete this.data.settings._id;
     }
 
+    if (this.db && Array.isArray(this.data.translationCache) && this.data.translationCache.length > 0) {
+      try {
+        const collection = this.db.collection('translationCache');
+        await collection.deleteMany({});
+        const bulkOps = this.data.translationCache.map(entry => {
+          const doc = JSON.parse(JSON.stringify(entry));
+          if (!doc.id) {
+            doc.id = `${doc.fileHash}_${doc.lineIndex}`;
+          }
+          doc._id = doc.id;
+          return {
+            replaceOne: {
+              filter: { _id: doc.id },
+              replacement: doc,
+              upsert: true
+            }
+          };
+        });
+        if (bulkOps.length > 0) {
+          await collection.bulkWrite(bulkOps);
+        }
+      } catch (err) {
+        console.error('[DB RESTORE ERROR] Failed to write restored translation cache:', err);
+      }
+    }
+
     await this.save();
   }
 
@@ -287,6 +313,36 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
     Object.assign(s, updates);
     await this.save();
     return s;
+  }
+
+  async getTranslationCache(fileHash, targetLanguage) {
+    if (!this.db) return [];
+    try {
+      const collection = this.db.collection('translationCache');
+      const docs = await collection.find({ fileHash, targetLanguage }).toArray();
+      for (const doc of docs) {
+        if (doc && doc._id) delete doc._id;
+      }
+      return docs;
+    } catch (err) {
+      console.error('[DB READ ERROR] Failed to fetch translation cache:', err);
+      return [];
+    }
+  }
+
+  async clearTranslationCache(fileHash, targetLanguage) {
+    if (!this.db) return;
+    try {
+      const collection = this.db.collection('translationCache');
+      await collection.deleteMany({ fileHash, targetLanguage });
+      if (this.data.translationCache) {
+        this.data.translationCache = this.data.translationCache.filter(
+          entry => entry.fileHash !== fileHash || entry.targetLanguage !== targetLanguage
+        );
+      }
+    } catch (err) {
+      console.error('[DB WRITE ERROR] Failed to clear translation cache:', err);
+    }
   }
 
   async insertTranslationCacheEntries(entries) {
@@ -371,7 +427,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
         currentSession: null
       };
       this.data.users.push(user);
-      await this.save();
+      this.save().catch(err => console.error("DB Save error in getUser:", err));
     }
     return user;
   }
@@ -379,7 +435,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
   async updateUser(id, updates) {
     const user = await this.getUser(id);
     Object.assign(user, updates);
-    await this.save();
+    this.save().catch(err => console.error("DB Save error in updateUser:", err));
     return user;
   }
 
@@ -406,7 +462,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
       isMulti
     };
     this.data.projects.push(project);
-    await this.save();
+    this.save().catch(err => console.error("DB Save error in createProject:", err));
     return project;
   }
 
@@ -424,7 +480,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
         chatHistory: []
       };
       this.data.episodes.push(episode);
-      await this.save();
+      this.save().catch(err => console.error("DB Save error in createEpisode:", err));
     }
     return episode;
   }
@@ -433,7 +489,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
     const episode = this.data.episodes.find(e => e.id === episodeId);
     if (episode) {
       episode.chatHistory = history;
-      await this.save();
+      this.save().catch(err => console.error("DB Save error in updateEpisodeHistory:", err));
     }
   }
 
@@ -477,7 +533,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
     this.data.teams.push(team);
 
     await this.updateUser(numericOwnerId, { teamId: code });
-    await this.save();
+    this.save().catch(err => console.error("DB Save error in createTeam:", err));
     return team;
   }
 
@@ -488,7 +544,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
       if (team.tokens >= 100) {
         team.hasLowBalanceWarned = false;
       }
-      await this.save();
+      this.save().catch(err => console.error("DB Save error in updateTeam:", err));
     }
     return team;
   }
@@ -501,7 +557,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
         team.members.push(numericUserId);
       }
       await this.updateUser(numericUserId, { teamId: team.id });
-      await this.save();
+      this.save().catch(err => console.error("DB Save error in addUserToTeam:", err));
     }
     return team;
   }
@@ -520,7 +576,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
       if (team.members.length === 0) {
         this.data.teams = this.data.teams.filter(t => t.id !== team.id);
       }
-      await this.save();
+      this.save().catch(err => console.error("DB Save error in removeUserFromTeam:", err));
     }
     return { team, newOwnerId };
   }
@@ -545,7 +601,7 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
       createdAt: new Date().toISOString()
     };
     this.data.payments.push(payment);
-    await this.save();
+    this.save().catch(err => console.error("DB Save error in createPayment:", err));
     return payment;
   }
 
@@ -611,14 +667,14 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
       createdAt: new Date().toISOString()
     };
     this.data.promocodes.push(promo);
-    await this.save();
+    this.save().catch(err => console.error("DB Save error in createPromocode:", err));
     return promo;
   }
 
   async deletePromocode(id) {
     if (this.data.promocodes) {
       this.data.promocodes = this.data.promocodes.filter(p => p.id !== id);
-      await this.save();
+      this.save().catch(err => console.error("DB Save error in deletePromocode:", err));
     }
   }
 
