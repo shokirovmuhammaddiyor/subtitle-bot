@@ -28,7 +28,8 @@ function getKeyState(key) {
       blockedUntil: 0,
       invalid: false,
       lastUsed: 0,
-      reservedUntil: 0
+      reservedUntil: 0,
+      consecutiveFailures: 0
     };
   }
   return keyStates[key];
@@ -48,11 +49,11 @@ function getAvailableKey(keys) {
     const state = getKeyState(key);
     
     // Key is available after its block cooldown, its reservation cooldown,
-    // and its 20 seconds idle cooldown have all expired.
+    // and its 3 seconds idle cooldown have all expired.
     const nextAvailableTime = Math.max(
       state.blockedUntil,
       state.reservedUntil,
-      state.lastUsed + 20000
+      state.lastUsed + 3000
     );
     
     const waitTime = Math.max(0, nextAvailableTime - now);
@@ -405,6 +406,10 @@ Strict rules you MUST follow:
         const { key: currentKey, waitTimeMs } = keyInfo;
 
         if (waitTimeMs > 0) {
+          if (waitTimeMs > 300000) { // 5 minutes
+            throw new Error(`TRANSLATION_FAILED: Barcha kiritilgan API kalitlar limitlari to'liq tugadi (kutish vaqti ${Math.ceil(waitTimeMs / 60000)} daqiqa). Iltimos, kalitlaringizni yoki to'lov balansini tekshiring.`);
+          }
+
           logger('INFO', `[KEY ROTATION] All keys blocked. Waiting ${Math.ceil(waitTimeMs / 1000)}s for the next key to unblock...`);
           // Notify progress about the wait
           await onProgress({
@@ -467,6 +472,10 @@ Strict rules you MUST follow:
           });
 
           chunkSuccess = true;
+
+          // Reset consecutive failures on success
+          const state = getKeyState(currentKey);
+          state.consecutiveFailures = 0;
         } catch (err) {
           lastError = err;
           const errMsg = err.message || '';
@@ -496,19 +505,33 @@ Strict rules you MUST follow:
             state.invalid = true;
             logger('WARNING', `[KEY ROTATION] Key marked as INVALID.`);
           } else if (is429) {
+            state.consecutiveFailures = (state.consecutiveFailures || 0) + 1;
             let cooldownMs = 60000;
             const retryMatch = errMsg.match(/"retryDelay"\s*:\s*"(\d+)s"/) || errMsg.match(/retry in (\d+(?:\.\d+)?)s/i);
             if (retryMatch) {
               const retrySeconds = Math.ceil(parseFloat(retryMatch[1]));
               cooldownMs = Math.min(retrySeconds * 1000 + 1000, 120000);
-            } else if (errMsg.includes('daily') || errMsg.includes('per day')) {
-              cooldownMs = 4 * 60 * 60 * 1000; // 4 hours for daily limits
-              logger('WARNING', `[KEY ROTATION] Key marked as DAILY LIMIT EXHAUSTED (4 hours cooldown).`);
+            } else if (
+              errMsg.includes('daily') || 
+              errMsg.includes('per day') || 
+              errMsg.includes('exceeded your current quota') || 
+              errMsg.includes('billing details') ||
+              errMsg.includes('billing account')
+            ) {
+              cooldownMs = 4 * 60 * 60 * 1000; // 4 hours for daily/billing limits
+              state.consecutiveFailures = 3; // force daily limit exhaust
             } else {
               cooldownMs = 60000;
             }
+
+            if (state.consecutiveFailures >= 2) {
+              cooldownMs = 4 * 60 * 60 * 1000; // 4 hours cooldown
+              logger('WARNING', `[KEY ROTATION] Key marked as DAILY/BILLING LIMIT EXHAUSTED (4 hours cooldown) after ${state.consecutiveFailures} consecutive 429 failures.`);
+            } else {
+              logger('WARNING', `[KEY ROTATION] Key marked as BLOCKED for ${Math.ceil(cooldownMs / 1000)}s.`);
+            }
+
             state.blockedUntil = Date.now() + cooldownMs;
-            logger('WARNING', `[KEY ROTATION] Key marked as BLOCKED for ${Math.ceil(cooldownMs / 1000)}s.`);
           } else {
             state.blockedUntil = Date.now() + 5000;
             logger('WARNING', `[KEY ROTATION] Key temporary failure. Cooldown: 5s.`);
