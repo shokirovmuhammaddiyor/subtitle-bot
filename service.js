@@ -27,7 +27,8 @@ function getKeyState(key) {
     keyStates[key] = {
       blockedUntil: 0,
       invalid: false,
-      lastUsed: 0
+      lastUsed: 0,
+      reservedUntil: 0
     };
   }
   return keyStates[key];
@@ -40,53 +41,42 @@ function getAvailableKey(keys) {
     throw new Error('All configured Gemini API keys are invalid.');
   }
 
-  // Filter keys that are not blocked and have been idle for at least 20 seconds
-  const activeKeys = validKeys.filter(k => {
-    const state = getKeyState(k);
-    return state.blockedUntil <= now && (now - state.lastUsed) >= 20000;
-  });
-
-  if (activeKeys.length > 0) {
-    // Select the key that was used the least recently to distribute load evenly
-    let chosenKey = activeKeys[0];
-    let minLastUsed = getKeyState(chosenKey).lastUsed;
-    for (const key of activeKeys) {
-      const state = getKeyState(key);
-      if (state.lastUsed < minLastUsed) {
-        minLastUsed = state.lastUsed;
-        chosenKey = key;
-      }
-    }
-    getKeyState(chosenKey).lastUsed = now;
-    return { key: chosenKey, waitTimeMs: 0 };
-  }
-
-  // All keys are either blocked or have been used within the last 20 seconds.
-  // Find the key that will be available the earliest (considering both blockedUntil and the 20s delay).
-  let bestKey = validKeys[0];
+  let bestKey = null;
   let minWaitTime = Infinity;
 
   for (const key of validKeys) {
     const state = getKeyState(key);
-    const timeUntilBlocked = Math.max(0, state.blockedUntil - now);
-    const timeSinceLastUsed = now - state.lastUsed;
-    const timeUntilCooldown = Math.max(0, 20000 - timeSinceLastUsed);
-    const waitTimeForThisKey = Math.max(timeUntilBlocked, timeUntilCooldown);
     
-    if (waitTimeForThisKey < minWaitTime) {
-      minWaitTime = waitTimeForThisKey;
+    // Key is available after its block cooldown, its reservation cooldown,
+    // and its 20 seconds idle cooldown have all expired.
+    const nextAvailableTime = Math.max(
+      state.blockedUntil,
+      state.reservedUntil,
+      state.lastUsed + 20000
+    );
+    
+    const waitTime = Math.max(0, nextAvailableTime - now);
+    if (waitTime < minWaitTime) {
+      minWaitTime = waitTime;
       bestKey = key;
     }
   }
 
-  const finalWait = minWaitTime === Infinity ? 0 : minWaitTime;
-  if (finalWait > 0) {
-    getKeyState(bestKey).lastUsed = now + finalWait;
-  } else {
-    getKeyState(bestKey).lastUsed = now;
+  if (!bestKey) {
+    throw new Error('No key could be selected.');
   }
 
-  return { key: bestKey, waitTimeMs: finalWait };
+  const state = getKeyState(bestKey);
+  if (minWaitTime > 0) {
+    // Reserve this slot so other concurrent workers don't grab it
+    state.reservedUntil = now + minWaitTime;
+  } else {
+    // If it's ready immediately, mark it as used now and clear any reservations
+    state.lastUsed = now;
+    state.reservedUntil = 0;
+  }
+
+  return { key: bestKey, waitTimeMs: minWaitTime };
 }
 
 export function cleanupTranslationCache() {
