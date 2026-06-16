@@ -851,7 +851,7 @@ async function downloadFileFromChannel(fileId, filename) {
       logEvent('ERROR', "GramJS orqali yuklab olishda xatolik: " + e.message);
     } finally {
       if (userClient) {
-        await userClient.disconnect().catch(() => {});
+        await userClient.destroy().catch(() => {});
       }
     }
   }
@@ -4441,7 +4441,7 @@ async function uploadFileToChannel(filename, content, type, isFilePath = false) 
         logEvent('ERROR', "GramJS orqali yuklashda xato, Telegrafga o'tilmoqda. xato: " + e.message);
       } finally {
         if (userClient) {
-          await userClient.disconnect().catch(() => {});
+          await userClient.destroy().catch(() => {});
         }
       }
     }

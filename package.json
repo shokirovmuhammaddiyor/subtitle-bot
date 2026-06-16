@@ -21,6 +21,7 @@
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "react-is": "^19.0.0",
     "recharts": "^3.8.1",
     "telegraf": "^4.16.3",
     "telegram": "^2.26.22",

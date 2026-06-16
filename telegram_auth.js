@@ -8,6 +8,7 @@ export async function sendCode(phone, apiId, apiHash) {
   const client = new TelegramClient(stringSession, Number(apiId), apiHash, {
     connectionRetries: 5,
   });
+  client.setLogLevel("none");
 
   await client.connect();
   const result = await client.sendCode(
@@ -36,6 +37,7 @@ export async function verifyCode(phone, code) {
       })
     );
     const sessionString = client.session.save();
+    try { await client.destroy(); } catch (e) {}
     clients.delete(phone); // cleanup: xotira sizishini oldini olish
     return { sessionString, needs2fa: false };
   } catch (err) {
@@ -44,7 +46,7 @@ export async function verifyCode(phone, code) {
       return { needs2fa: true };
     }
     // Boshqa xatolar uchun clientni tozalab disconnect qilamiz
-    try { await client.disconnect(); } catch (e) {}
+    try { await client.destroy(); } catch (e) {}
     clients.delete(phone);
     throw err;
   }
@@ -66,10 +68,11 @@ export async function verify2fa(phone, password) {
       })
     );
     const sessionString = client.session.save();
+    try { await client.destroy(); } catch (e) {}
     clients.delete(phone); // cleanup: muvaffaqiyatli ulanishdan keyin xotirani tozalash
     return { sessionString };
   } catch (err) {
-    try { await client.disconnect(); } catch (e) {}
+    try { await client.destroy(); } catch (e) {}
     clients.delete(phone);
     throw err;
   }
@@ -83,6 +86,7 @@ export async function startQrLogin(apiId, apiHash) {
   const client = new TelegramClient(stringSession, Number(apiId), apiHash, {
     connectionRetries: 5,
   });
+  client.setLogLevel("none");
 
   await client.connect();
 
@@ -127,7 +131,7 @@ export async function startQrLogin(apiId, apiHash) {
         const errMsg = err.message || String(err);
         qrSession.status = 'ERROR';
         qrSession.error = errMsg;
-        try { await client.disconnect(); } catch (e) {}
+        try { await client.destroy(); } catch (e) {}
         return true;
       }
     }
@@ -140,13 +144,13 @@ export async function startQrLogin(apiId, apiHash) {
     } catch (e) {
       qrSession.status = 'ERROR';
       qrSession.error = e.message;
-      try { await client.disconnect(); } catch (_) {}
+      try { await client.destroy(); } catch (_) {}
     }
   }).catch(async (err) => {
     if (err.message === '2FA_TIMEOUT') return;
     qrSession.status = 'ERROR';
     qrSession.error = err.message || String(err);
-    try { client.disconnect(); } catch (e) {}
+    try { await client.destroy(); } catch (e) {}
   });
 
   const authInterval = setInterval(async () => {
@@ -218,7 +222,7 @@ export async function cancelQrLogin(sessionId) {
   const qrSession = qrSessions.get(sessionId);
   if (qrSession) {
     try {
-      await qrSession.client.disconnect();
+      await qrSession.client.destroy();
     } catch (e) {}
     qrSessions.delete(sessionId);
     return true;

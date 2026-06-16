@@ -9,6 +9,7 @@ export async function getConnectedClient(apiId, apiHash, sessionString) {
     timeout: 30000, // 30 seconds timeout per request/chunk
     autoReconnect: true
   });
+  client.setLogLevel("none");
   await client.connect();
   return client;
 }
