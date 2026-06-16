@@ -305,33 +305,113 @@ export async function translateSubtitles({
       while (!lineSuccess && attempts < maxAttempts) {
         attempts++;
         try {
-          const body = {
-            text: item.d.cleanText,
-            to: targetLanguage,
-            lang: targetLanguage,
-            target_lang: targetLanguage,
-            target: targetLanguage
-          };
+          let translatedText = null;
 
-          const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${jwtToken}`
-            },
-            body: JSON.stringify(body)
-          });
+          if (apiUrl.includes('tahrirchi')) {
+            const mapLanguage = (lang) => {
+              if (!lang) return 'uzn_Latn';
+              const l = lang.toLowerCase();
+              if (l.includes('uz') || l.includes('o\'z') || l.includes('o’z')) return 'uzn_Latn';
+              if (l.includes('ru') || l.includes('rus')) return 'rus_Cyrl';
+              if (l.includes('en') || l.includes('ing')) return 'eng_Latn';
+              if (l.includes('kaa') || l.includes('qor')) return 'kaa_Latn';
+              return 'uzn_Latn';
+            };
 
-          if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`HTTP ${response.status}: ${errText}`);
-          }
+            const targetLangCode = mapLanguage(targetLanguage);
+            const sourceLangCode = targetLangCode === 'eng_Latn' ? 'uzn_Latn' : 'eng_Latn';
 
-          const resData = await response.json();
-          const translatedText = resData.translated_text || resData.translatedText || resData.result || resData.translation || resData.text || (resData.data && resData.data.translation) || (resData.data && resData.data.translations && resData.data.translations[0] && resData.data.translations[0].translatedText);
+            const bodyData = {
+              jobs: [
+                {
+                  text: item.d.cleanText,
+                  id: Math.floor(10000 + Math.random() * 90000)
+                }
+              ],
+              source_lang: sourceLangCode,
+              target_lang: targetLangCode
+            };
 
-          if (!translatedText) {
-            throw new Error(`Response format not recognized. Data received: ${JSON.stringify(resData)}`);
+            const pythonCode = `
+import sys, json, requests
+try:
+    data = json.loads(sys.stdin.read())
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
+        'Authorization': data['token'],
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    r = requests.post(data['url'], headers=headers, json=data['body'], timeout=15)
+    if r.status_code != 200:
+        print(json.dumps({'error': f"HTTP {r.status_code}: {r.text[:200]}"}))
+    else:
+        print(r.text)
+except Exception as e:
+    print(json.dumps({'error': str(e)}))
+            `;
+
+            const { spawnSync } = await import('child_process');
+            const inputData = JSON.stringify({
+              url: apiUrl,
+              token: jwtToken.startsWith('Bearer ') ? jwtToken : `Bearer ${jwtToken}`,
+              body: bodyData
+            });
+
+            const proc = spawnSync('python3', ['-c', pythonCode], {
+              input: inputData,
+              encoding: 'utf-8'
+            });
+
+            if (proc.error) {
+              throw new Error(`Python process execution failed: ${proc.error.message}`);
+            }
+
+            const output = proc.stdout.trim();
+            let resData;
+            try {
+              resData = JSON.parse(output);
+            } catch (err) {
+              throw new Error(`Failed to parse python output: ${output || proc.stderr}`);
+            }
+
+            if (resData.error) {
+              throw new Error(resData.error);
+            }
+
+            translatedText = resData.sentences && resData.sentences[0] && resData.sentences[0].translated;
+            if (!translatedText) {
+              throw new Error(`Response format not recognized. Data received: ${JSON.stringify(resData)}`);
+            }
+          } else {
+            const body = {
+              text: item.d.cleanText,
+              to: targetLanguage,
+              lang: targetLanguage,
+              target_lang: targetLanguage,
+              target: targetLanguage
+            };
+
+            const response = await fetch(apiUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${jwtToken}`
+              },
+              body: JSON.stringify(body)
+            });
+
+            if (!response.ok) {
+              const errText = await response.text();
+              throw new Error(`HTTP ${response.status}: ${errText}`);
+            }
+
+            const resData = await response.json();
+            translatedText = resData.translated_text || resData.translatedText || resData.result || resData.translation || resData.text || (resData.data && resData.data.translation) || (resData.data && resData.data.translations && resData.data.translations[0] && resData.data.translations[0].translatedText);
+
+            if (!translatedText) {
+              throw new Error(`Response format not recognized. Data received: ${JSON.stringify(resData)}`);
+            }
           }
 
           item.d.translatedText = translatedText;
