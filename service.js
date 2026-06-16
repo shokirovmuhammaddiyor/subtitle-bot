@@ -336,55 +336,88 @@ export async function translateSubtitles({
         while (!chunkSuccess && attempts < maxAttempts) {
           attempts++;
           try {
-            const proc = spawnSync('curl', [
-              '-s',
-              '-w', '\n%{http_code}',
-              '--max-time', '30',
-              '-X', 'POST',
-              apiUrl,
-              '-H', 'Content-Type: application/json',
-              '-H', 'Accept: application/json, text/plain, */*',
-              '-H', `Authorization: ${token}`,
-              '-H', 'User-Agent: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36',
-              '-H', 'Origin: https://tilmoch.ai',
-              '-H', 'Referer: https://tilmoch.ai/',
-              '-H', 'Accept-Language: en-US,en;q=0.5',
-              '-H', 'sec-ch-ua: "Chromium";v="148", "Brave";v="148", "Not/A)Brand";v="99"',
-              '-H', 'sec-ch-ua-mobile: ?1',
-              '-H', 'sec-ch-ua-platform: "Android"',
-              '-H', 'sec-fetch-dest: empty',
-              '-H', 'sec-fetch-mode: cors',
-              '-H', 'sec-fetch-site: cross-site',
-              '-H', 'sec-gpc: 1',
-              '-d', '@-'
-            ], {
-              input: JSON.stringify(bodyData),
+            const pythonCode = `
+import sys, json
+try:
+    data = json.loads(sys.stdin.read())
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
+        'Authorization': data['token'],
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36',
+        'Origin': 'https://tilmoch.ai',
+        'Referer': 'https://tilmoch.ai/',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'sec-ch-ua': '"Chromium";v="148", "Brave";v="148", "Not/A)Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'cross-site',
+        'sec-gpc': '1'
+    }
+    
+    proxy = data.get('proxy')
+    
+    use_curl_cffi = False
+    try:
+        from curl_cffi import requests as cffi_requests
+        use_curl_cffi = True
+    except ImportError:
+        import requests
+        
+    requests_args = {
+        'headers': headers,
+        'json': data['body'],
+        'timeout': 30
+    }
+    
+    if proxy:
+        requests_args['proxies'] = {
+            'http': proxy,
+            'https': proxy
+        }
+        
+    if use_curl_cffi:
+        requests_args['impersonate'] = 'chrome'
+        r = cffi_requests.post(data['url'], **requests_args)
+    else:
+        r = requests.post(data['url'], **requests_args)
+        
+    if r.status_code != 200:
+        print(json.dumps({'error': f"HTTP {r.status_code}: {r.text[:200]}"}))
+    else:
+        print(r.text)
+except Exception as e:
+    print(json.dumps({'error': str(e)}))
+            `;
+
+            const inputData = JSON.stringify({
+              url: apiUrl,
+              token: token,
+              body: bodyData,
+              proxy: process.env.TRANSLATOR_PROXY || null
+            });
+
+            const proc = spawnSync('python3', ['-c', pythonCode], {
+              input: inputData,
               encoding: 'utf-8'
             });
 
             if (proc.error) {
-              throw new Error(`curl process execution failed: ${proc.error.message}`);
+              throw new Error(`Python process execution failed: ${proc.error.message}`);
             }
 
             const output = proc.stdout.trim();
-            const lastNewlineIndex = output.lastIndexOf('\n');
-            if (lastNewlineIndex === -1) {
-              throw new Error(`Invalid response format from curl. Output: ${output || proc.stderr}`);
-            }
-
-            const responseBody = output.substring(0, lastNewlineIndex).trim();
-            const statusCodeString = output.substring(lastNewlineIndex + 1).trim();
-            const statusCode = parseInt(statusCodeString, 10);
-
-            if (statusCode !== 200) {
-              throw new Error(`HTTP ${statusCode}: ${responseBody.substring(0, 200)}`);
-            }
-
             let resData;
             try {
-              resData = JSON.parse(responseBody);
+              resData = JSON.parse(output);
             } catch (err) {
-              throw new Error(`Failed to parse API output: ${responseBody || proc.stderr}`);
+              throw new Error(`Failed to parse python output: ${output || proc.stderr}`);
+            }
+
+            if (resData.error) {
+              throw new Error(resData.error);
             }
 
             if (!resData.sentences || !Array.isArray(resData.sentences)) {
