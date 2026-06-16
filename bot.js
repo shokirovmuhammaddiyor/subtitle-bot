@@ -3299,7 +3299,7 @@ function setupBotHandlers(bot) {
     }
   });
 
-  bot.action(/type_(.+)/, async (ctx) => {
+  bot.action(/^type_(.+)/, async (ctx) => {
     try {
       const loc = getLocaleByCtx(ctx);
       await ctx.answerCbQuery();
@@ -3324,7 +3324,7 @@ function setupBotHandlers(bot) {
     }
   });
 
-  bot.action(/lang_(.+)/, async (ctx) => {
+  bot.action(/^lang_(.+)/, async (ctx) => {
     try {
       const loc = getLocaleByCtx(ctx);
       await ctx.answerCbQuery();
