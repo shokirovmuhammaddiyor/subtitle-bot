@@ -83,7 +83,7 @@ export class Database {
       if (!this.data.settings) {
         this.data.settings = {
           defaultBatchSize: 45,
-          aiModel: 'gemini-2.0-flash',
+          aiModel: 'gemini-3.5-flash',
           systemPrompt: `Sen professional subtitr tarjimoni va o'zbek tiliga mahalliylashtirish mutaxassisisan. Vazifang berilgan matnlarni yuqori sifatli, tabiiy va dublyajbop o'zbek tiliga to'liq tarjima qilish.
 
 Hozirgi loyiha nomi: {movie_name}
@@ -111,7 +111,11 @@ Quyidagi qoidalarga qat'iy va to'liq amal qil:
             { id: 'monthly_starter', name: "Boshlang'ich (Oxirgi 10 ta Subtitle)", type: 'monthly_starter', value: 10, price: "50,000 O'zS" },
             { id: 'monthly_fandub', name: "FanDub (Oxirgi 25 ta Subtitle)", type: 'monthly_fandub', value: 25, price: "120,000 O'zS" },
             { id: 'monthly_studio', name: "Studio (Oxirgi 50 ta Subtitle)", type: 'monthly_studio', value: 50, price: "200,000 O'zS" }
-          ]
+          ],
+          translatorJwtToken: "",
+          translatorApiUrl: "https://subtitle-tarjimon.root.sx/api/translate",
+          autoModelSwitchingEnabled: true,
+          fallbackModels: ['gemini-2.5-flash', 'gemma-3-27b-it']
         };
         await this.save();
       } else if (!this.data.settings.packages || !this.data.settings.packages.some(p => p.id === 'monthly_starter')) {

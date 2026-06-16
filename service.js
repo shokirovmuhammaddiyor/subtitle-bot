@@ -243,6 +243,7 @@ export async function translateSubtitles({
   chatHistory = [],
   projectTitle = '',
   episodeNumber = '',
+  translatorType = 'ai',
   onProgress = () => {}
 }) {
   const parsed = parseSubtitles(content, ext);
@@ -276,6 +277,119 @@ export async function translateSubtitles({
 
   if (untranslatedDialogues.length === 0) {
     logger('SUCCESS', `All lines loaded from cache. Rebuilding subtitles instantly...`);
+    return rebuildSubtitles(parsed, ext);
+  }
+
+  if (translatorType === 'translator') {
+    const settings = await db.getSettings();
+    const jwtToken = settings.translatorJwtToken || '';
+    const apiUrl = settings.translatorApiUrl || 'https://subtitle-tarjimon.root.sx/api/translate';
+
+    if (!jwtToken) {
+      throw new Error('Tarjimon JWT Tokeni sozlanmagan. Iltimos admin paneldan sozlang.');
+    }
+
+    logger('INFO', `Starting translator API session. Total: ${total}, Untranslated: ${untranslatedDialogues.length}`);
+
+    const startTime = Date.now();
+    let translatedCount = total - untranslatedDialogues.length;
+
+    // Send one by one
+    for (let i = 0; i < untranslatedDialogues.length; i++) {
+      const item = untranslatedDialogues[i];
+      let lineSuccess = false;
+      let attempts = 0;
+      const maxAttempts = 3;
+      let lastLineError = null;
+
+      while (!lineSuccess && attempts < maxAttempts) {
+        attempts++;
+        try {
+          const body = {
+            text: item.d.cleanText,
+            to: targetLanguage,
+            lang: targetLanguage,
+            target_lang: targetLanguage,
+            target: targetLanguage
+          };
+
+          const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${jwtToken}`
+            },
+            body: JSON.stringify(body)
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`HTTP ${response.status}: ${errText}`);
+          }
+
+          const resData = await response.json();
+          const translatedText = resData.translated_text || resData.translatedText || resData.result || resData.translation || resData.text || (resData.data && resData.data.translation) || (resData.data && resData.data.translations && resData.data.translations[0] && resData.data.translations[0].translatedText);
+
+          if (!translatedText) {
+            throw new Error(`Response format not recognized. Data received: ${JSON.stringify(resData)}`);
+          }
+
+          item.d.translatedText = translatedText;
+
+          // Cache the translation
+          const newCacheEntries = [{
+            fileHash,
+            lineIndex: item.originalIndex,
+            originalText: item.d.cleanText,
+            translatedText: translatedText,
+            targetLanguage
+          }];
+
+          db.insertTranslationCacheEntries(newCacheEntries).catch(err => {
+            logger('ERROR', `Failed to insert cache entry: ${err.message}`);
+          });
+
+          lineSuccess = true;
+        } catch (err) {
+          lastLineError = err;
+          logger('WARNING', `Translator line failure (attempt ${attempts}): ${err.message}`);
+          if (attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+      }
+
+      if (!lineSuccess) {
+        throw new Error(`Qator tarjimasi muvaffaqiyatsiz tugadi: ${lastLineError ? lastLineError.message : 'Noma\'lum xato'}`);
+      }
+
+      // Update progress
+      translatedCount++;
+      const progress = translatedCount / total;
+      const elapsed = Date.now() - startTime;
+      const actualTranslatedCount = translatedCount - (total - untranslatedDialogues.length);
+      const rate = actualTranslatedCount > 0 ? elapsed / actualTranslatedCount : 0;
+      const remainingTime = (total - translatedCount) * rate;
+      const etaSec = Math.round(remainingTime / 1000);
+      const etaStr = etaSec > 0 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : '0s';
+
+      const barLength = 10;
+      const filled = Math.round(barLength * progress);
+      const empty = barLength - filled;
+      const progressBar = `[${'█'.repeat(filled)}${'░'.repeat(empty)}] ${Math.round(progress * 100)}%`;
+
+      await onProgress({
+        total,
+        translated: translatedCount,
+        eta: etaStr,
+        progressBar
+      });
+
+      // Add a small delay between requests to avoid overloading the API
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    logger('SUCCESS', `Translator API session completed successfully.`);
     return rebuildSubtitles(parsed, ext);
   }
 
@@ -421,61 +535,93 @@ Strict rules you MUST follow:
         chunkAttempts++;
         const ai = getAi(currentKey);
 
-        try {
-          const response = await ai.models.generateContent({
-            model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
-            contents: userPrompt,
-            config: {
-              systemInstruction: combinedSystemInstruction,
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.INTEGER },
-                    translated_text: { type: Type.STRING }
-                  },
-                  required: ['id', 'translated_text']
-                }
-              }
-            }
-          });
-
-          const resText = response.text;
-          const results = JSON.parse(resText);
-
-          const newCacheEntries = [];
-          for (const item of results) {
-            const chunkItem = chunk.find(cItem => cItem.d.id === item.id);
-            if (chunkItem) {
-              chunkItem.d.translatedText = item.translated_text;
-
-              // Prepare cache entry
-              newCacheEntries.push({
-                fileHash,
-                lineIndex: chunkItem.originalIndex,
-                originalText: chunkItem.d.cleanText,
-                translatedText: item.translated_text,
-                targetLanguage
-              });
+        const settings = await db.getSettings();
+        const autoSwitch = settings.autoModelSwitchingEnabled || false;
+        const fallbacks = Array.isArray(settings.fallbackModels) ? settings.fallbackModels : [];
+        const primaryModel = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+        
+        const modelsToTry = [primaryModel];
+        if (autoSwitch) {
+          for (const m of fallbacks) {
+            if (m && m.trim() && m !== primaryModel) {
+              modelsToTry.push(m.trim());
             }
           }
+        }
 
-          // Insert directly to MongoDB (bulk upsert, async background save)
-          db.insertTranslationCacheEntries(newCacheEntries).catch(err => {
-            logger('ERROR', `Failed to insert cache entries: ${err.message}`);
-          });
+        let modelSuccess = false;
+        let lastModelError = null;
 
-          chunkSuccess = true;
+        for (const modelToUse of modelsToTry) {
+          try {
+            if (autoSwitch && modelsToTry.length > 1) {
+              logger('INFO', `Attempting translation chunk with model ${modelToUse}...`);
+            }
+            const response = await ai.models.generateContent({
+              model: modelToUse,
+              contents: userPrompt,
+              config: {
+                systemInstruction: combinedSystemInstruction,
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.INTEGER },
+                      translated_text: { type: Type.STRING }
+                    },
+                    required: ['id', 'translated_text']
+                  }
+                }
+              }
+            });
 
-          // Reset consecutive failures on success
-          const state = getKeyState(currentKey);
-          state.consecutiveFailures = 0;
-        } catch (err) {
-          lastError = err;
-          const errMsg = err.message || '';
-          logger('WARNING', `[GEMINI API WARNING] Key failure (attempt ${chunkAttempts}): ${errMsg.substring(0, 150)}`);
+            const resText = response.text;
+            const results = JSON.parse(resText);
+
+            const newCacheEntries = [];
+            for (const item of results) {
+              const chunkItem = chunk.find(cItem => cItem.d.id === item.id);
+              if (chunkItem) {
+                chunkItem.d.translatedText = item.translated_text;
+
+                // Prepare cache entry
+                newCacheEntries.push({
+                  fileHash,
+                  lineIndex: chunkItem.originalIndex,
+                  originalText: chunkItem.d.cleanText,
+                  translatedText: item.translated_text,
+                  targetLanguage
+                });
+              }
+            }
+
+            // Insert directly to MongoDB (bulk upsert, async background save)
+            db.insertTranslationCacheEntries(newCacheEntries).catch(err => {
+              logger('ERROR', `Failed to insert cache entries: ${err.message}`);
+            });
+
+            chunkSuccess = true;
+            modelSuccess = true;
+
+            // Reset consecutive failures on success
+            const state = getKeyState(currentKey);
+            state.consecutiveFailures = 0;
+            break;
+          } catch (err) {
+            lastModelError = err;
+            logger('WARNING', `[MODEL SWITCHING] Failed with model ${modelToUse} using current key: ${err.message}`);
+            if (!autoSwitch) {
+              break;
+            }
+          }
+        }
+
+        if (!modelSuccess) {
+          lastError = lastModelError;
+          const errMsg = lastModelError.message || '';
+          logger('WARNING', `[GEMINI API WARNING] Key failure on all models (attempt ${chunkAttempts}): ${errMsg.substring(0, 150)}`);
 
           // Check error type
           const is429 = errMsg.includes('429') || 

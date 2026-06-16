@@ -610,13 +610,16 @@ export default function App() {
 
   const [botToken, setBotToken] = useState('');
   const [apiKeys, setApiKeys] = useState<string[]>(['']);
-  const [aiModel, setAiModel] = useState('gemini-2.0-flash');
+  const [aiModel, setAiModel] = useState('gemini-3.5-flash');
   const [isCustomModel, setIsCustomModel] = useState(false);
   const [defaultBatchSize, setDefaultBatchSize] = useState('45');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [cardNumber, setCardNumber] = useState('');
-  const [cardOwner, setCardOwner] = useState('');
   const [packages, setPackages] = useState<any[]>([]);
+  const [translatorJwtToken, setTranslatorJwtToken] = useState('');
+  const [translatorApiUrl, setTranslatorApiUrl] = useState('');
+  const [autoModelSwitchingEnabled, setAutoModelSwitchingEnabled] = useState(false);
+  const [fallbackModels, setFallbackModels] = useState<string[]>([]);
 
   // Automated Anime & Telegram User Account Pairing States
   const [autoDownloadEnabled, setAutoDownloadEnabled] = useState(false);
@@ -1153,9 +1156,14 @@ export default function App() {
         setPackages(data.packages || []);
         setTelegramApiId(data.telegramApiId || '');
         setTelegramApiHash(data.telegramApiHash || '');
-        const loadedModel = data.aiModel || 'gemini-2.0-flash';
+        setTranslatorJwtToken(data.translatorJwtToken || '');
+        setTranslatorApiUrl(data.translatorApiUrl || '');
+        setAutoModelSwitchingEnabled(!!data.autoModelSwitchingEnabled);
+        setFallbackModels(Array.isArray(data.fallbackModels) ? data.fallbackModels : []);
+        const loadedModel = data.aiModel || 'gemini-3.5-flash';
         setAiModel(loadedModel);
         const standardModels = [
+          'gemini-3.5-flash',
           'gemini-2.5-flash',
           'gemini-2.5-flash-lite-preview-06-17',
           'gemini-2.0-flash',
@@ -1256,7 +1264,11 @@ export default function App() {
           packages,
           telegramApiId,
           telegramApiHash,
-          aiModel
+          aiModel,
+          translatorJwtToken,
+          translatorApiUrl,
+          autoModelSwitchingEnabled,
+          fallbackModels
         })
       });
       if (res.ok) {
@@ -1955,9 +1967,10 @@ export default function App() {
                                   }
                                 }}
                               >
-                                <option value="gemini-2.0-flash">gemini-2.0-flash (Default)</option>
+                                <option value="gemini-3.5-flash">gemini-3.5-flash (Default)</option>
                                 <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                                 <option value="gemini-2.5-flash-lite-preview-06-17">gemini-2.5-flash-lite</option>
+                                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
                                 <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview</option>
                                 <option value="gemma-3-27b-it">gemma-3-27b-it</option>
                                 <option value="custom">✍️ Boshqa (Custom Model)...</option>
@@ -1997,6 +2010,31 @@ export default function App() {
                           </div>
                         </div>
                         <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-800">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id="autoModelSwitchingEnabled"
+                              className="rounded border-slate-800 text-sky-500 focus:ring-sky-500 bg-slate-950 cursor-pointer"
+                              checked={autoModelSwitchingEnabled}
+                              onChange={(e) => setAutoModelSwitchingEnabled(e.target.checked)}
+                            />
+                            <label htmlFor="autoModelSwitchingEnabled" className="text-[10px] uppercase font-bold text-slate-400 font-mono cursor-pointer selection:bg-transparent">
+                              Auto Model Switching (Fallback)
+                            </label>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono font-mono">Fallback Models (comma-separated)</label>
+                            <input
+                              type="text"
+                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={fallbackModels.join(', ')}
+                              onChange={(e) => setFallbackModels(e.target.value.split(',').map(m => m.trim()))}
+                              placeholder="gemini-2.5-flash, gemma-3-27b-it"
+                              disabled={!autoModelSwitchingEnabled}
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-slate-800">
                           <div>
                             <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Telegram API ID (.env)</label>
                             <input
@@ -2013,6 +2051,34 @@ export default function App() {
                               className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
                               value={telegramApiHash}
                               onChange={(e) => setTelegramApiHash(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-2">
+                        <h3 className="text-xs font-bold uppercase text-slate-200 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+                          <Globe className="w-3.5 h-3.5 text-sky-400" /> Translator API Configuration (TARJIMON)
+                        </h3>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Translator API URL</label>
+                            <input
+                              type="text"
+                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={translatorApiUrl}
+                              onChange={(e) => setTranslatorApiUrl(e.target.value)}
+                              placeholder="https://subtitle-tarjimon.root.sx/api/translate"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1 font-mono">Translator JWT Token</label>
+                            <input
+                              type="password"
+                              className="w-full bg-slate-950 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                              value={translatorJwtToken}
+                              onChange={(e) => setTranslatorJwtToken(e.target.value)}
+                              placeholder="JWT Token"
                             />
                           </div>
                         </div>

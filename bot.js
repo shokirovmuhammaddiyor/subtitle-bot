@@ -680,13 +680,17 @@ app.get('/api/config', async (req, res) => {
     packages: settings.packages || [],
     telegramApiId: process.env.TELEGRAM_API_ID || '',
     telegramApiHash: process.env.TELEGRAM_API_HASH || '',
-    aiModel: settings.aiModel || process.env.GEMINI_MODEL || 'gemini-2.0-flash'
+    aiModel: settings.aiModel || process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+    translatorJwtToken: settings.translatorJwtToken || '',
+    translatorApiUrl: settings.translatorApiUrl || 'https://subtitle-tarjimon.root.sx/api/translate',
+    autoModelSwitchingEnabled: settings.autoModelSwitchingEnabled || false,
+    fallbackModels: settings.fallbackModels || []
   });
 });
 
 app.post('/api/config', async (req, res) => {
   try {
-    const { botToken, geminiApiKey, defaultBatchSize, systemPrompt, auto_download_enabled, storage_channel_id, cardNumber, cardOwner, packages, telegramApiId, telegramApiHash, aiModel } = req.body;
+    const { botToken, geminiApiKey, defaultBatchSize, systemPrompt, auto_download_enabled, storage_channel_id, cardNumber, cardOwner, packages, telegramApiId, telegramApiHash, aiModel, translatorJwtToken, translatorApiUrl, autoModelSwitchingEnabled, fallbackModels } = req.body;
     process.env.BOT_TOKEN = botToken;
     process.env.GEMINI_API_KEY = geminiApiKey;
     process.env.DEFAULT_BATCH_SIZE = defaultBatchSize;
@@ -694,7 +698,7 @@ app.post('/api/config', async (req, res) => {
     process.env.TELEGRAM_API_HASH = telegramApiHash;
     if (aiModel) process.env.GEMINI_MODEL = aiModel;
 
-    const envContent = `BOT_TOKEN=${botToken}\nGEMINI_API_KEY=${geminiApiKey}\nDEFAULT_BATCH_SIZE=${defaultBatchSize}\nPORT=3000\nTELEGRAM_API_ID=${telegramApiId || ''}\nTELEGRAM_API_HASH=${telegramApiHash || ''}\nGEMINI_MODEL=${aiModel || process.env.GEMINI_MODEL || 'gemini-2.0-flash'}\n`;
+    const envContent = `BOT_TOKEN=${botToken}\nGEMINI_API_KEY=${geminiApiKey}\nDEFAULT_BATCH_SIZE=${defaultBatchSize}\nPORT=3000\nTELEGRAM_API_ID=${telegramApiId || ''}\nTELEGRAM_API_HASH=${telegramApiHash || ''}\nGEMINI_MODEL=${aiModel || process.env.GEMINI_MODEL || 'gemini-3.5-flash'}\n`;
     await fs.writeFile('.env', envContent, 'utf-8');
 
     await db.updateSettings({
@@ -703,13 +707,17 @@ app.post('/api/config', async (req, res) => {
       telegramApiId: telegramApiId || '',
       telegramApiHash: telegramApiHash || '',
       defaultBatchSize: parseInt(defaultBatchSize) || 45,
-      aiModel: aiModel || settings.aiModel || 'gemini-2.0-flash',
+      aiModel: aiModel || settings.aiModel || 'gemini-3.5-flash',
       systemPrompt: systemPrompt || '',
       auto_download_enabled: !!auto_download_enabled,
       storage_channel_id: storage_channel_id || '',
       cardNumber: cardNumber || '',
       cardOwner: cardOwner || '',
-      packages: packages || []
+      packages: packages || [],
+      translatorJwtToken: translatorJwtToken || '',
+      translatorApiUrl: translatorApiUrl || 'https://subtitle-tarjimon.root.sx/api/translate',
+      autoModelSwitchingEnabled: !!autoModelSwitchingEnabled,
+      fallbackModels: Array.isArray(fallbackModels) ? fallbackModels : []
     });
 
     resetAi();
@@ -3332,9 +3340,37 @@ function setupBotHandlers(bot) {
       } else {
         const nameMap = { uzbek: 'O\'zbekcha', english: 'Inglizcha', russian: 'Ruscha' };
         user.currentSession.targetLanguage = nameMap[lang] || lang;
-        await db.updateUser(userId, { currentSession: user.currentSession });
-        await runTranslation(ctx, user);
+        await db.updateUser(userId, { currentSession: user.currentSession, state: 'SELECT_TRANSLATOR_TYPE' });
+        await sendTranslatorTypeKeyboard(ctx);
       }
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  bot.action('trans_type_ai', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const userId = ctx.from.id;
+      const user = await db.getUser(userId);
+      if (!user.currentSession) return;
+      user.currentSession.translatorType = 'ai';
+      await db.updateUser(userId, { currentSession: user.currentSession, state: 'IDLE' });
+      await runTranslation(ctx, user);
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  bot.action('trans_type_translator', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const userId = ctx.from.id;
+      const user = await db.getUser(userId);
+      if (!user.currentSession) return;
+      user.currentSession.translatorType = 'translator';
+      await db.updateUser(userId, { currentSession: user.currentSession, state: 'IDLE' });
+      await runTranslation(ctx, user);
     } catch (err) {
       console.error(err);
     }
@@ -3513,8 +3549,8 @@ function setupBotHandlers(bot) {
       } else if (user.state === 'ENTER_CUSTOM_LANG') {
         if (!user.currentSession) return;
         user.currentSession.targetLanguage = ctx.message.text;
-        await db.updateUser(userId, { currentSession: user.currentSession });
-        await runTranslation(ctx, user);
+        await db.updateUser(userId, { currentSession: user.currentSession, state: 'SELECT_TRANSLATOR_TYPE' });
+        await sendTranslatorTypeKeyboard(ctx);
       } else if (user.state === 'ENTER_QUALITY') {
         user.settings.qualityPrompt = ctx.message.text;
         await db.updateUser(userId, { state: 'IDLE', settings: user.settings });
@@ -3548,6 +3584,30 @@ async function sendLanguageKeyboard(ctx) {
   } catch (e) {
     try {
       const msg = await ctx.reply(loc.select_language, kb);
+      if (msg && msg.message_id) {
+        await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
+      }
+    } catch (e2) {}
+  }
+}
+
+async function sendTranslatorTypeKeyboard(ctx) {
+  const loc = getLocaleByCtx(ctx);
+  const text = "Tarjima provayderini tanlang / Select translation provider:\n\n" +
+               "🤖 **AI** — 1 token = 1 qator\n" +
+               "✍️ **TARJIMON** — 2 token = 1 qator";
+  const kb = Markup.inlineKeyboard([
+    [
+      Markup.button.callback("AI 🤖", 'trans_type_ai'),
+      Markup.button.callback("TARJIMON ✍️", 'trans_type_translator')
+    ],
+    [Markup.button.callback('❌ Bekor qilish / Cancel', 'cancel_translation')]
+  ]);
+  try {
+    await ctx.editMessageText(text, { parse_mode: 'Markdown', ...kb });
+  } catch (e) {
+    try {
+      const msg = await ctx.reply(text, { parse_mode: 'Markdown', ...kb });
       if (msg && msg.message_id) {
         await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
       }
@@ -3596,20 +3656,20 @@ async function runTranslation(ctx, user) {
 
   // Parse lines and compute required tokens based on untranslated remaining lines
   let totalDialoguesCount = 0;
-  let requiredTokens = 0;
+  let remainingLines = 0;
   let fileHash = '';
   try {
     const { getRemainingTokenCount } = await import('./service.js');
     const res = await getRemainingTokenCount(session.fileContent, session.fileExt, session.targetLanguage);
     totalDialoguesCount = res.total;
-    requiredTokens = res.remaining;
+    remainingLines = res.remaining;
     fileHash = res.fileHash;
   } catch (err) {
     return ctx.reply("Subtitr faylini tahlil qilishda xatolik yuz berdi.");
   }
 
   // Verification of resume file existence in storage channel
-  if (requiredTokens < totalDialoguesCount) {
+  if (remainingLines < totalDialoguesCount) {
     db.data.translationCacheMetadata = db.data.translationCacheMetadata || {};
     const meta = db.data.translationCacheMetadata[fileHash];
     let isResumeValid = false;
@@ -3624,8 +3684,13 @@ async function runTranslation(ctx, user) {
       await db.clearTranslationCache(fileHash, session.targetLanguage);
       delete db.data.translationCacheMetadata[fileHash];
       await db.save();
-      requiredTokens = totalDialoguesCount;
+      remainingLines = totalDialoguesCount;
     }
+  }
+
+  let requiredTokens = remainingLines;
+  if (session.translatorType === 'translator') {
+    requiredTokens = remainingLines * 2;
   }
 
   if (team.tokens < requiredTokens) {
@@ -3694,7 +3759,7 @@ async function runTranslation(ctx, user) {
     }
   }
 
-  let translatedCount = totalDialoguesCount - requiredTokens;
+  let translatedCount = totalDialoguesCount - remainingLines;
 
   try {
     logEvent('INFO', `Starting job for user @${ctx.from.username || userId}. File: ${session.fileName}`);
@@ -3716,6 +3781,7 @@ async function runTranslation(ctx, user) {
       batchSize: user.settings.batchSize,
       projectTitle: session.projectTitle,
       episodeNumber: session.isMultiEpisode ? session.episodeNumber : '1',
+      translatorType: session.translatorType || 'ai',
       onProgress: async ({ total, translated, eta, progressBar }) => {
         translatedCount = translated;
         const text = loc.progress_message
