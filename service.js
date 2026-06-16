@@ -340,7 +340,17 @@ try:
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/plain, */*',
         'Authorization': data['token'],
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36',
+        'Origin': 'https://tilmoch.ai',
+        'Referer': 'https://tilmoch.ai/',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'sec-ch-ua': '"Chromium";v="148", "Brave";v="148", "Not/A)Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'cross-site',
+        'sec-gpc': '1'
     }
     r = requests.post(data['url'], headers=headers, json=data['body'], timeout=15)
     if r.status_code != 200:

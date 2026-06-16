@@ -698,7 +698,7 @@ app.post('/api/config', async (req, res) => {
     process.env.TELEGRAM_API_HASH = telegramApiHash;
     if (aiModel) process.env.GEMINI_MODEL = aiModel;
 
-    const envContent = `BOT_TOKEN=${botToken}\nGEMINI_API_KEY=${geminiApiKey}\nDEFAULT_BATCH_SIZE=${defaultBatchSize}\nPORT=3000\nTELEGRAM_API_ID=${telegramApiId || ''}\nTELEGRAM_API_HASH=${telegramApiHash || ''}\nGEMINI_MODEL=${aiModel || process.env.GEMINI_MODEL || 'gemini-3.5-flash'}\n`;
+    const envContent = `BOT_TOKEN=${botToken}\nGEMINI_API_KEY=${geminiApiKey}\nDEFAULT_BATCH_SIZE=${defaultBatchSize}\nPORT=${process.env.PORT || 3000}\nTELEGRAM_API_ID=${telegramApiId || ''}\nTELEGRAM_API_HASH=${telegramApiHash || ''}\nGEMINI_MODEL=${aiModel || process.env.GEMINI_MODEL || 'gemini-3.5-flash'}\n`;
     await fs.writeFile('.env', envContent, 'utf-8');
 
     await db.updateSettings({
@@ -760,7 +760,7 @@ app.post('/api/admin/import-config', async (req, res) => {
       process.env.DEFAULT_BATCH_SIZE = env.DEFAULT_BATCH_SIZE || process.env.DEFAULT_BATCH_SIZE || '45';
       process.env.TELEGRAM_API_ID = env.TELEGRAM_API_ID || process.env.TELEGRAM_API_ID || '';
       process.env.TELEGRAM_API_HASH = env.TELEGRAM_API_HASH || process.env.TELEGRAM_API_HASH || '';
-      const envContent = `BOT_TOKEN=${process.env.BOT_TOKEN}\nGEMINI_API_KEY=${process.env.GEMINI_API_KEY}\nDEFAULT_BATCH_SIZE=${process.env.DEFAULT_BATCH_SIZE}\nPORT=3000\nTELEGRAM_API_ID=${process.env.TELEGRAM_API_ID || ''}\nTELEGRAM_API_HASH=${process.env.TELEGRAM_API_HASH || ''}\n`;
+      const envContent = `BOT_TOKEN=${process.env.BOT_TOKEN}\nGEMINI_API_KEY=${process.env.GEMINI_API_KEY}\nDEFAULT_BATCH_SIZE=${process.env.DEFAULT_BATCH_SIZE}\nPORT=${process.env.PORT || 3000}\nTELEGRAM_API_ID=${process.env.TELEGRAM_API_ID || ''}\nTELEGRAM_API_HASH=${process.env.TELEGRAM_API_HASH || ''}\n`;
       await fs.writeFile('.env', envContent, 'utf-8');
     }
     if (settings) {
