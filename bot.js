@@ -3586,10 +3586,10 @@ async function sendLanguageKeyboard(ctx) {
   ]);
   // Mavjud xabarni edit qilish, aks holda yangi xabar yuborish
   try {
-    await ctx.editMessageText(loc.select_language, kb);
+    await ctx.editMessageText(loc.select_language, { parse_mode: 'Markdown', ...kb });
   } catch (e) {
     try {
-      const msg = await ctx.reply(loc.select_language, kb);
+      const msg = await ctx.reply(loc.select_language, { parse_mode: 'Markdown', ...kb });
       if (msg && msg.message_id) {
         await db.updateUser(ctx.from.id, { lastMenuMessageId: msg.message_id });
       }
@@ -3770,9 +3770,19 @@ async function runTranslation(ctx, user) {
   try {
     logEvent('INFO', `Starting job for user @${ctx.from.username || userId}. File: ${session.fileName}`);
 
-    // Tarjima jarayonini boshlash haqida xabar yuborish
-    statusMsg = await ctx.reply(loc.processing);
-    progressMessageId = statusMsg.message_id;
+    // Tarjima jarayonini boshlash haqida xabar yuborish (edit if callback, else reply)
+    if (isCallback && ctx.callbackQuery && ctx.callbackQuery.message) {
+      progressMessageId = ctx.callbackQuery.message.message_id;
+      try {
+        await ctx.editMessageText(loc.processing);
+      } catch (e) {
+        statusMsg = await ctx.reply(loc.processing);
+        progressMessageId = statusMsg.message_id;
+      }
+    } else {
+      statusMsg = await ctx.reply(loc.processing);
+      progressMessageId = statusMsg.message_id;
+    }
 
     // Fetch global systemPrompt from DB settings
     const settings = await db.getSettings();
