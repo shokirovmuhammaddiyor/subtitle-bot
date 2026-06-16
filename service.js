@@ -289,111 +289,201 @@ export async function translateSubtitles({
       throw new Error('Tarjimon JWT Tokeni sozlanmagan. Iltimos admin paneldan sozlang.');
     }
 
-    logger('INFO', `Starting translator API session. Total: ${total}, Untranslated: ${untranslatedDialogues.length}`);
+    if (apiUrl.includes('tahrirchi')) {
+      const batchSize = 30; // Batch size for tahrirchi API
+      const chunks = [];
+      for (let i = 0; i < untranslatedDialogues.length; i += batchSize) {
+        chunks.push(untranslatedDialogues.slice(i, i + batchSize));
+      }
 
-    const startTime = Date.now();
-    let translatedCount = total - untranslatedDialogues.length;
+      logger('INFO', `Starting translator API session in batches of ${batchSize}. Total: ${total}, Untranslated: ${untranslatedDialogues.length}`);
 
-    // Send one by one
-    for (let i = 0; i < untranslatedDialogues.length; i++) {
-      const item = untranslatedDialogues[i];
-      let lineSuccess = false;
-      let attempts = 0;
-      const maxAttempts = 3;
-      let lastLineError = null;
+      const startTime = Date.now();
+      let translatedCount = total - untranslatedDialogues.length;
 
-      while (!lineSuccess && attempts < maxAttempts) {
-        attempts++;
-        try {
-          let translatedText = null;
+      const { spawnSync } = await import('child_process');
+      const token = jwtToken.startsWith('Bearer ') ? jwtToken : `Bearer ${jwtToken}`;
 
-          if (apiUrl.includes('tahrirchi')) {
-            const mapLanguage = (lang) => {
-              if (!lang) return 'uzn_Latn';
-              const l = lang.toLowerCase();
-              if (l.includes('uz') || l.includes('o\'z') || l.includes('o’z')) return 'uzn_Latn';
-              if (l.includes('ru') || l.includes('rus')) return 'rus_Cyrl';
-              if (l.includes('en') || l.includes('ing')) return 'eng_Latn';
-              if (l.includes('kaa') || l.includes('qor')) return 'kaa_Latn';
-              return 'uzn_Latn';
-            };
+      const mapLanguage = (lang) => {
+        if (!lang) return 'uzn_Latn';
+        const l = lang.toLowerCase();
+        if (l.includes('uz') || l.includes('o\'z') || l.includes('o’z')) return 'uzn_Latn';
+        if (l.includes('ru') || l.includes('rus')) return 'rus_Cyrl';
+        if (l.includes('en') || l.includes('ing')) return 'eng_Latn';
+        if (l.includes('kaa') || l.includes('qor')) return 'kaa_Latn';
+        return 'uzn_Latn';
+      };
 
-            const targetLangCode = mapLanguage(targetLanguage);
-            const sourceLangCode = targetLangCode === 'eng_Latn' ? 'uzn_Latn' : 'eng_Latn';
+      const targetLangCode = mapLanguage(targetLanguage);
+      const sourceLangCode = targetLangCode === 'eng_Latn' ? 'uzn_Latn' : 'eng_Latn';
 
-            const bodyData = {
-              jobs: [
-                {
-                  text: item.d.cleanText,
-                  id: Math.floor(10000 + Math.random() * 90000)
-                }
-              ],
-              source_lang: sourceLangCode,
-              target_lang: targetLangCode
-            };
+      for (let c = 0; c < chunks.length; c++) {
+        const chunk = chunks[c];
+        let chunkSuccess = false;
+        let attempts = 0;
+        const maxAttempts = 3;
+        let lastChunkError = null;
 
-            const pythonCode = `
-import sys, json, requests
-try:
-    data = json.loads(sys.stdin.read())
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*',
-        'Authorization': data['token'],
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36',
-        'Origin': 'https://tilmoch.ai',
-        'Referer': 'https://tilmoch.ai/',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'sec-ch-ua': '"Chromium";v="148", "Brave";v="148", "Not/A)Brand";v="99"',
-        'sec-ch-ua-mobile': '?1',
-        'sec-ch-ua-platform': '"Android"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'cross-site',
-        'sec-gpc': '1'
-    }
-    r = requests.post(data['url'], headers=headers, json=data['body'], timeout=15)
-    if r.status_code != 200:
-        print(json.dumps({'error': f"HTTP {r.status_code}: {r.text[:200]}"}))
-    else:
-        print(r.text)
-except Exception as e:
-    print(json.dumps({'error': str(e)}))
-            `;
+        const bodyData = {
+          jobs: chunk.map((item, idx) => ({
+            text: item.d.cleanText,
+            id: 10000 + idx
+          })),
+          source_lang: sourceLangCode,
+          target_lang: targetLangCode
+        };
 
-            const { spawnSync } = await import('child_process');
-            const inputData = JSON.stringify({
-              url: apiUrl,
-              token: jwtToken.startsWith('Bearer ') ? jwtToken : `Bearer ${jwtToken}`,
-              body: bodyData
-            });
-
-            const proc = spawnSync('python3', ['-c', pythonCode], {
-              input: inputData,
+        while (!chunkSuccess && attempts < maxAttempts) {
+          attempts++;
+          try {
+            const proc = spawnSync('curl', [
+              '-s',
+              '-w', '\n%{http_code}',
+              '--max-time', '30',
+              '-X', 'POST',
+              apiUrl,
+              '-H', 'Content-Type: application/json',
+              '-H', 'Accept: application/json, text/plain, */*',
+              '-H', `Authorization: ${token}`,
+              '-H', 'User-Agent: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36',
+              '-H', 'Origin: https://tilmoch.ai',
+              '-H', 'Referer: https://tilmoch.ai/',
+              '-H', 'Accept-Language: en-US,en;q=0.5',
+              '-H', 'sec-ch-ua: "Chromium";v="148", "Brave";v="148", "Not/A)Brand";v="99"',
+              '-H', 'sec-ch-ua-mobile: ?1',
+              '-H', 'sec-ch-ua-platform: "Android"',
+              '-H', 'sec-fetch-dest: empty',
+              '-H', 'sec-fetch-mode: cors',
+              '-H', 'sec-fetch-site: cross-site',
+              '-H', 'sec-gpc: 1',
+              '-d', '@-'
+            ], {
+              input: JSON.stringify(bodyData),
               encoding: 'utf-8'
             });
 
             if (proc.error) {
-              throw new Error(`Python process execution failed: ${proc.error.message}`);
+              throw new Error(`curl process execution failed: ${proc.error.message}`);
             }
 
             const output = proc.stdout.trim();
+            const lastNewlineIndex = output.lastIndexOf('\n');
+            if (lastNewlineIndex === -1) {
+              throw new Error(`Invalid response format from curl. Output: ${output || proc.stderr}`);
+            }
+
+            const responseBody = output.substring(0, lastNewlineIndex).trim();
+            const statusCodeString = output.substring(lastNewlineIndex + 1).trim();
+            const statusCode = parseInt(statusCodeString, 10);
+
+            if (statusCode !== 200) {
+              throw new Error(`HTTP ${statusCode}: ${responseBody.substring(0, 200)}`);
+            }
+
             let resData;
             try {
-              resData = JSON.parse(output);
+              resData = JSON.parse(responseBody);
             } catch (err) {
-              throw new Error(`Failed to parse python output: ${output || proc.stderr}`);
+              throw new Error(`Failed to parse API output: ${responseBody || proc.stderr}`);
             }
 
-            if (resData.error) {
-              throw new Error(resData.error);
-            }
-
-            translatedText = resData.sentences && resData.sentences[0] && resData.sentences[0].translated;
-            if (!translatedText) {
+            if (!resData.sentences || !Array.isArray(resData.sentences)) {
               throw new Error(`Response format not recognized. Data received: ${JSON.stringify(resData)}`);
             }
-          } else {
+
+            const translationMap = new Map();
+            for (const sent of resData.sentences) {
+              if (sent.id !== undefined && sent.id !== null) {
+                translationMap.set(Number(sent.id), sent.translated);
+              }
+            }
+
+            for (let idx = 0; idx < chunk.length; idx++) {
+              const item = chunk[idx];
+              const translatedText = translationMap.get(10000 + idx);
+              if (translatedText !== undefined && translatedText !== null && translatedText !== '') {
+                item.d.translatedText = translatedText;
+              } else {
+                logger('WARNING', `Translation not found or empty for job ID ${10000 + idx}. Falling back to original: "${item.d.cleanText}"`);
+                item.d.translatedText = item.d.cleanText;
+              }
+            }
+
+            // Cache the translations
+            const newCacheEntries = chunk.map(item => ({
+              fileHash,
+              lineIndex: item.originalIndex,
+              originalText: item.d.cleanText,
+              translatedText: item.d.translatedText,
+              targetLanguage
+            }));
+
+            db.insertTranslationCacheEntries(newCacheEntries).catch(err => {
+              logger('ERROR', `Failed to insert cache entry: ${err.message}`);
+            });
+
+            chunkSuccess = true;
+          } catch (err) {
+            lastChunkError = err;
+            logger('WARNING', `Translator batch failure (attempt ${attempts}): ${err.message}`);
+            if (attempts < maxAttempts) {
+              const sleepTime = err.message.includes('429') ? 8000 : 2000;
+              await new Promise(resolve => setTimeout(resolve, sleepTime));
+            }
+          }
+        }
+
+        if (!chunkSuccess) {
+          throw new Error(`Batch tarjimasi muvaffaqiyatsiz tugadi: ${lastChunkError ? lastChunkError.message : 'Noma\'lum xato'}`);
+        }
+
+        // Update progress
+        translatedCount += chunk.length;
+        const progress = translatedCount / total;
+        const elapsed = Date.now() - startTime;
+        const actualTranslatedCount = translatedCount - (total - untranslatedDialogues.length);
+        const rate = actualTranslatedCount > 0 ? elapsed / actualTranslatedCount : 0;
+        const remainingTime = (total - translatedCount) * rate;
+        const etaSec = Math.round(remainingTime / 1000);
+        const etaStr = etaSec > 0 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : '0s';
+
+        const barLength = 10;
+        const filled = Math.round(barLength * progress);
+        const empty = barLength - filled;
+        const progressBar = `[${'█'.repeat(filled)}${'░'.repeat(empty)}] ${Math.round(progress * 100)}%`;
+
+        await onProgress({
+          total,
+          translated: translatedCount,
+          eta: etaStr,
+          progressBar
+        });
+
+        // Add a small delay between batch requests to avoid overloading the API
+        if (c < chunks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      logger('SUCCESS', `Translator API session completed successfully.`);
+      return rebuildSubtitles(parsed, ext);
+    } else {
+      // One-by-one translation for non-tahrirchi APIs
+      logger('INFO', `Starting translator API session (one-by-one). Total: ${total}, Untranslated: ${untranslatedDialogues.length}`);
+
+      const startTime = Date.now();
+      let translatedCount = total - untranslatedDialogues.length;
+
+      for (let i = 0; i < untranslatedDialogues.length; i++) {
+        const item = untranslatedDialogues[i];
+        let lineSuccess = false;
+        let attempts = 0;
+        const maxAttempts = 3;
+        let lastLineError = null;
+
+        while (!lineSuccess && attempts < maxAttempts) {
+          attempts++;
+          try {
             const body = {
               text: item.d.cleanText,
               to: targetLanguage,
@@ -417,70 +507,71 @@ except Exception as e:
             }
 
             const resData = await response.json();
-            translatedText = resData.translated_text || resData.translatedText || resData.result || resData.translation || resData.text || (resData.data && resData.data.translation) || (resData.data && resData.data.translations && resData.data.translations[0] && resData.data.translations[0].translatedText);
+            const translatedText = resData.translated_text || resData.translatedText || resData.result || resData.translation || resData.text || (resData.data && resData.data.translation) || (resData.data && resData.data.translations && resData.data.translations[0] && resData.data.translations[0].translatedText);
 
             if (!translatedText) {
               throw new Error(`Response format not recognized. Data received: ${JSON.stringify(resData)}`);
             }
-          }
 
-          item.d.translatedText = translatedText;
+            item.d.translatedText = translatedText;
 
-          // Cache the translation
-          const newCacheEntries = [{
-            fileHash,
-            lineIndex: item.originalIndex,
-            originalText: item.d.cleanText,
-            translatedText: translatedText,
-            targetLanguage
-          }];
+            // Cache the translation
+            const newCacheEntries = [{
+              fileHash,
+              lineIndex: item.originalIndex,
+              originalText: item.d.cleanText,
+              translatedText: translatedText,
+              targetLanguage
+            }];
 
-          db.insertTranslationCacheEntries(newCacheEntries).catch(err => {
-            logger('ERROR', `Failed to insert cache entry: ${err.message}`);
-          });
+            db.insertTranslationCacheEntries(newCacheEntries).catch(err => {
+              logger('ERROR', `Failed to insert cache entry: ${err.message}`);
+            });
 
-          lineSuccess = true;
-        } catch (err) {
-          lastLineError = err;
-          logger('WARNING', `Translator line failure (attempt ${attempts}): ${err.message}`);
-          if (attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            lineSuccess = true;
+          } catch (err) {
+            lastLineError = err;
+            logger('WARNING', `Translator line failure (attempt ${attempts}): ${err.message}`);
+            if (attempts < maxAttempts) {
+              const sleepTime = err.message.includes('429') ? 8000 : 1000;
+              await new Promise(resolve => setTimeout(resolve, sleepTime));
+            }
           }
         }
+
+        if (!lineSuccess) {
+          throw new Error(`Qator tarjimasi muvaffaqiyatsiz tugadi: ${lastLineError ? lastLineError.message : 'Noma\'lum xato'}`);
+        }
+
+        // Update progress
+        translatedCount++;
+        const progress = translatedCount / total;
+        const elapsed = Date.now() - startTime;
+        const actualTranslatedCount = translatedCount - (total - untranslatedDialogues.length);
+        const rate = actualTranslatedCount > 0 ? elapsed / actualTranslatedCount : 0;
+        const remainingTime = (total - translatedCount) * rate;
+        const etaSec = Math.round(remainingTime / 1000);
+        const etaStr = etaSec > 0 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : '0s';
+
+        const barLength = 10;
+        const filled = Math.round(barLength * progress);
+        const empty = barLength - filled;
+        const progressBar = `[${'█'.repeat(filled)}${'░'.repeat(empty)}] ${Math.round(progress * 100)}%`;
+
+        await onProgress({
+          total,
+          translated: translatedCount,
+          eta: etaStr,
+          progressBar
+        });
+
+        // Add a small delay between requests to avoid overloading the API
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
 
-      if (!lineSuccess) {
-        throw new Error(`Qator tarjimasi muvaffaqiyatsiz tugadi: ${lastLineError ? lastLineError.message : 'Noma\'lum xato'}`);
-      }
-
-      // Update progress
-      translatedCount++;
-      const progress = translatedCount / total;
-      const elapsed = Date.now() - startTime;
-      const actualTranslatedCount = translatedCount - (total - untranslatedDialogues.length);
-      const rate = actualTranslatedCount > 0 ? elapsed / actualTranslatedCount : 0;
-      const remainingTime = (total - translatedCount) * rate;
-      const etaSec = Math.round(remainingTime / 1000);
-      const etaStr = etaSec > 0 ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s` : '0s';
-
-      const barLength = 10;
-      const filled = Math.round(barLength * progress);
-      const empty = barLength - filled;
-      const progressBar = `[${'█'.repeat(filled)}${'░'.repeat(empty)}] ${Math.round(progress * 100)}%`;
-
-      await onProgress({
-        total,
-        translated: translatedCount,
-        eta: etaStr,
-        progressBar
-      });
-
-      // Add a small delay between requests to avoid overloading the API
-      await new Promise(resolve => setTimeout(resolve, 100));
+      logger('SUCCESS', `Translator API session completed successfully.`);
+      return rebuildSubtitles(parsed, ext);
     }
-
-    logger('SUCCESS', `Translator API session completed successfully.`);
-    return rebuildSubtitles(parsed, ext);
   }
 
   const chunks = [];
