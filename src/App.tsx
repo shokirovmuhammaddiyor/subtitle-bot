@@ -615,6 +615,7 @@ export default function App() {
   const [defaultBatchSize, setDefaultBatchSize] = useState('45');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [cardNumber, setCardNumber] = useState('');
+  const [cardOwner, setCardOwner] = useState('');
   const [packages, setPackages] = useState<any[]>([]);
   const [translatorJwtToken, setTranslatorJwtToken] = useState('');
   const [translatorApiUrl, setTranslatorApiUrl] = useState('');

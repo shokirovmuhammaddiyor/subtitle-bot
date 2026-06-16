@@ -3147,11 +3147,11 @@ function setupBotHandlers(bot) {
         user.currentSession.fileContent = content;
 
         await db.updateUser(ctx.from.id, {
-          state: 'SELECT_LANGUAGE',
+          state: 'SELECT_TRANSLATOR_TYPE',
           currentSession: user.currentSession
         });
 
-        return sendLanguageKeyboard(ctx);
+        return sendTranslatorTypeKeyboard(ctx);
       }
 
       await db.updateUser(ctx.from.id, {
@@ -3236,8 +3236,8 @@ function setupBotHandlers(bot) {
           await db.updateUser(userId, { state: 'ENTER_EPISODE_NUMBER' });
           await ctx.editMessageText(loc.enter_episode_number);
         } else {
-          await db.updateUser(userId, { state: 'SELECT_LANGUAGE' });
-          await editMessageLanguageKeyboard(ctx);
+          await db.updateUser(userId, { state: 'SELECT_TRANSLATOR_TYPE' });
+          await sendTranslatorTypeKeyboard(ctx);
         }
       }
     } catch (err) {
@@ -3316,8 +3316,8 @@ function setupBotHandlers(bot) {
         await db.updateUser(userId, { state: 'ENTER_EPISODE_NUMBER' });
         await ctx.editMessageText(loc.enter_episode_number);
       } else {
-        await db.updateUser(userId, { state: 'SELECT_LANGUAGE' });
-        await editMessageLanguageKeyboard(ctx);
+        await db.updateUser(userId, { state: 'SELECT_TRANSLATOR_TYPE' });
+        await sendTranslatorTypeKeyboard(ctx);
       }
     } catch (err) {
       console.error(err);
@@ -3340,8 +3340,10 @@ function setupBotHandlers(bot) {
       } else {
         const nameMap = { uzbek: 'O\'zbekcha', english: 'Inglizcha', russian: 'Ruscha' };
         user.currentSession.targetLanguage = nameMap[lang] || lang;
-        await db.updateUser(userId, { currentSession: user.currentSession, state: 'SELECT_TRANSLATOR_TYPE' });
-        await sendTranslatorTypeKeyboard(ctx);
+        user.currentSession.translatorType = 'ai';
+        await db.updateUser(userId, { currentSession: user.currentSession, state: 'IDLE' });
+        const updatedUser = await db.getUser(userId);
+        await runTranslation(ctx, updatedUser);
       }
     } catch (err) {
       console.error(err);
@@ -3355,8 +3357,8 @@ function setupBotHandlers(bot) {
       const user = await db.getUser(userId);
       if (!user.currentSession) return;
       user.currentSession.translatorType = 'ai';
-      await db.updateUser(userId, { currentSession: user.currentSession, state: 'IDLE' });
-      await runTranslation(ctx, user);
+      await db.updateUser(userId, { currentSession: user.currentSession, state: 'SELECT_LANGUAGE' });
+      await sendLanguageKeyboard(ctx);
     } catch (err) {
       console.error(err);
     }
@@ -3369,8 +3371,10 @@ function setupBotHandlers(bot) {
       const user = await db.getUser(userId);
       if (!user.currentSession) return;
       user.currentSession.translatorType = 'translator';
+      user.currentSession.targetLanguage = "O'zbekcha";
       await db.updateUser(userId, { currentSession: user.currentSession, state: 'IDLE' });
-      await runTranslation(ctx, user);
+      const updatedUser = await db.getUser(userId);
+      await runTranslation(ctx, updatedUser);
     } catch (err) {
       console.error(err);
     }
@@ -3539,18 +3543,20 @@ function setupBotHandlers(bot) {
           await ctx.reply("Endi ushbu epizod uchun subtitr faylini (VTT, SRT, ASS) jo'nating: 📂");
         } else {
           await db.updateUser(userId, {
-            state: 'SELECT_LANGUAGE',
+            state: 'SELECT_TRANSLATOR_TYPE',
             currentSession: user.currentSession
           });
-          await sendLanguageKeyboard(ctx);
+          await sendTranslatorTypeKeyboard(ctx);
         }
       } else if (user.state === 'UPLOAD_SUBTITLE_FOR_CONTINUITY') {
         await ctx.reply("Iltimos, subtitr faylini rasm yoki matn xabari emas, Hujjat (fayl) ko'rinishida yuboring.");
       } else if (user.state === 'ENTER_CUSTOM_LANG') {
         if (!user.currentSession) return;
         user.currentSession.targetLanguage = ctx.message.text;
-        await db.updateUser(userId, { currentSession: user.currentSession, state: 'SELECT_TRANSLATOR_TYPE' });
-        await sendTranslatorTypeKeyboard(ctx);
+        user.currentSession.translatorType = 'ai';
+        await db.updateUser(userId, { currentSession: user.currentSession, state: 'IDLE' });
+        const updatedUser = await db.getUser(userId);
+        await runTranslation(ctx, updatedUser);
       } else if (user.state === 'ENTER_QUALITY') {
         user.settings.qualityPrompt = ctx.message.text;
         await db.updateUser(userId, { state: 'IDLE', settings: user.settings });
